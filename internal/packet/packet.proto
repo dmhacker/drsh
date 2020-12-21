@@ -1,0 +1,38 @@
+syntax = "proto3";
+package packet;
+
+option go_package = "github.com/drsh/internal/packet";
+
+message Packet {
+
+  enum PacketType {
+    // The client is responsible for initiating most requests
+    // and should usually expect a response from the server
+    CLIENT_PING = 0;
+    CLIENT_HANDSHAKE = 1;
+    CLIENT_HEARTBEAT = 2;
+    CLIENT_INPUT = 3;
+    CLIENT_PTY = 4;
+    // With the exception of SERVER_OUTPUT, these packets
+    // are always a direct response to a client request
+    SERVER_PING = 5;
+    SERVER_HANDSHAKE = 6;
+    SERVER_HEARTBEAT = 7;
+    SERVER_OUTPUT = 8;
+  }
+
+  // Shared fields
+  PacketType type = 1;
+  bytes sender = 2;
+  uint32 seq_num = 3;
+  bytes payload = 4; // Used by CLIENT_INPUT, SERVER_OUTPUT
+  
+  // Client only fields
+  uint32 pty_rows = 5;
+  uint32 pty_cols = 6;
+  uint32 pty_xpixels = 7;
+  uint32 pty_ypixels = 8;
+
+  // Server only fields
+  uint32 ack_seq_num = 9;
+}
