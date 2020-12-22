@@ -36,11 +36,14 @@ func main() {
 		return
 	}
 
-	// Start the server
+    // Start the logger
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
     sugar := logger.Sugar()
+
+	// Start the server
 	serv, err := server.NewServer(config.Name, config.Uri, sugar)
+    sugar.Infof("Started server '%s' with ID %s", serv.Name, serv.Id.String())
 	if err != nil {
         sugar.Error(err)
         return
