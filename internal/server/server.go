@@ -63,6 +63,7 @@ func (serv *Server) DeleteSession(sender uuid.UUID) {
 }
 
 func (serv *Server) HandlePing(sender uuid.UUID) {
+	// Send an identical response packet back, only including the server name
 	resp := packet.Packet{}
 	resp.Type = packet.Packet_SERVER_PING
 	resp.Sender = serv.Id[:]
@@ -73,6 +74,8 @@ func (serv *Server) HandlePing(sender uuid.UUID) {
 }
 
 func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
+	// Always send back a handshake response but vary success
+	// based on whether or not user has a session
 	resp := packet.Packet{}
 	resp.Type = packet.Packet_SERVER_HANDSHAKE
 	resp.Sender = serv.Id[:]
@@ -92,9 +95,39 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 		}
 	}
 	serv.Outgoing <- &resp
+
+	// Spawn goroutine to start capturing stdout from this session
+	// and convert it into outgoing packets
+	if resp.Success {
+		go (func() {
+			buf := make([]byte, 1024)
+			for {
+				session := serv.GetSession(sender)
+				if session != nil {
+					cnt, err := session.Receive(buf)
+					if err != nil {
+						serv.HandleExit(sender, err)
+					}
+					out := packet.Packet{}
+					out.Type = packet.Packet_SERVER_OUTPUT
+					out.Sender = serv.Id[:]
+					out.Recipient = sender[:]
+					out.Payload = buf[:cnt]
+					out.Success = true
+					serv.Outgoing <- &out
+				} else {
+					// If the session was already cleaned up, we
+					// can just end the goroutine gracefully
+					break
+				}
+			}
+		})()
+	}
 }
 
 func (serv *Server) HandleInput(sender uuid.UUID, payload []byte) {
+    // Any input goes directly to the session; no response packet necessary
+    // If the input fails to be written to the session, terminate the client
 	session := serv.GetSession(sender)
 	if session != nil {
 		written, err := session.Send(payload)
@@ -105,6 +138,7 @@ func (serv *Server) HandleInput(sender uuid.UUID, payload []byte) {
 }
 
 func (serv *Server) HandlePty(sender uuid.UUID, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
+    // Again, the resize event goes directly to the session
 	session := serv.GetSession(sender)
 	if session != nil {
 		session.Resize(rows, cols, xpixels, ypixels)
@@ -112,7 +146,10 @@ func (serv *Server) HandlePty(sender uuid.UUID, rows uint32, cols uint32, xpixel
 }
 
 func (serv *Server) HandleExit(sender uuid.UUID, err error) {
+    // Clean up any session state between the server and the client
 	serv.DeleteSession(sender)
+    // Send an acknowledgement back to the client to indicate that we have 
+    // closed the session on the server's end
 	resp := packet.Packet{}
 	resp.Type = packet.Packet_SERVER_EXIT
 	resp.Sender = serv.Id[:]
@@ -128,10 +165,12 @@ func (serv *Server) HandleExit(sender uuid.UUID, err error) {
 }
 
 func (serv *Server) StartTimeoutHandler() {
+    // Runs every 30 seconds and performs a sweep through the sessions to
+    // make sure none are expired (last packet received >10 minutes ago)
 	expiryCheck := func(k interface{}, v interface{}) bool {
 		sender, _ := k.(uuid.UUID)
 		session, _ := k.(*Session)
-		if session.Expired() {
+		if session.IsExpired() {
 			serv.HandleExit(sender, nil)
 		}
 		return true
@@ -143,6 +182,8 @@ func (serv *Server) StartTimeoutHandler() {
 }
 
 func (serv *Server) StartPacketHandler() {
+    // Any incoming packets over the channel have preliminary
+    // checks performed on them and then are handled by type
 	for pckt := range serv.Incoming {
 		recipient, err := uuid.FromBytes(pckt.GetRecipient())
 		if err != nil {
@@ -160,7 +201,7 @@ func (serv *Server) StartPacketHandler() {
 		}
 		session := serv.GetSession(sender)
 		if session != nil {
-			session.Record()
+			session.RefreshExpiry()
 		}
 		switch pt := pckt.GetType(); pt {
 		case packet.Packet_CLIENT_PING:
@@ -180,6 +221,8 @@ func (serv *Server) StartPacketHandler() {
 }
 
 func (serv *Server) StartPacketSender() {
+    // Any outgoing packets are immediately serialized and then
+    // sent through Redis
 	for pckt := range serv.Outgoing {
 		recipient, err := uuid.FromBytes(pckt.GetRecipient())
 		if err != nil {
@@ -201,11 +244,8 @@ func (serv *Server) StartPacketSender() {
 }
 
 func (serv *Server) Start() error {
-	// First goroutine handles sending any queued outgoing packets
 	go serv.StartPacketSender()
-	// Second goroutine handles interpretation of incoming packets
 	go serv.StartPacketHandler()
-	// Third goroutine handles clearing expired sessions (no packets from user)
 	go serv.StartTimeoutHandler()
 	// Main thread is responsible for parsing messages and passing them off to the packet handler
 	pubsub := serv.Rdb.Subscribe(ctx, "drsh:"+serv.Id.String())

@@ -31,11 +31,11 @@ func NewSession(rows uint32, cols uint32, xpixels uint32, ypixels uint32) (*Sess
 	}, nil
 }
 
-func (session *Session) Record() {
+func (session *Session) RefreshExpiry() {
 	session.Timestamp = time.Now()
 }
 
-func (session *Session) Expired() bool {
+func (session *Session) IsExpired() bool {
 	return time.Now().Sub(session.Timestamp).Minutes() >= 10
 }
 
