@@ -26,8 +26,8 @@ type Server struct {
 
 var ctx = context.Background()
 
-func NewServer(name string, url string) (*Server, error) {
-	opt, err := redis.ParseURL(url)
+func NewServer(name string, uri string) (*Server, error) {
+	opt, err := redis.ParseURL(uri)
 	if err != nil {
 		return nil, err
 	}
@@ -167,6 +167,7 @@ func (serv *Server) HandleExit(sender uuid.UUID, err error) {
 func (serv *Server) StartTimeoutHandler() {
     // Runs every 30 seconds and performs a sweep through the sessions to
     // make sure none are expired (last packet received >10 minutes ago)
+    log.Println("Timeout handler is online")
 	expiryCheck := func(k interface{}, v interface{}) bool {
 		sender, _ := k.(uuid.UUID)
 		session, _ := k.(*Session)
@@ -184,6 +185,7 @@ func (serv *Server) StartTimeoutHandler() {
 func (serv *Server) StartPacketHandler() {
     // Any incoming packets over the channel have preliminary
     // checks performed on them and then are handled by type
+    log.Println("Packet handler is online")
 	for pckt := range serv.Incoming {
 		recipient, err := uuid.FromBytes(pckt.GetRecipient())
 		if err != nil {
@@ -223,6 +225,7 @@ func (serv *Server) StartPacketHandler() {
 func (serv *Server) StartPacketSender() {
     // Any outgoing packets are immediately serialized and then
     // sent through Redis
+    log.Println("Packet sender is online")
 	for pckt := range serv.Outgoing {
 		recipient, err := uuid.FromBytes(pckt.GetRecipient())
 		if err != nil {
@@ -248,6 +251,7 @@ func (serv *Server) Start() error {
 	go serv.StartPacketHandler()
 	go serv.StartTimeoutHandler()
 	// Main thread is responsible for parsing messages and passing them off to the packet handler
+    log.Println("Packet receiver is online")
 	pubsub := serv.Rdb.Subscribe(ctx, "drsh:"+serv.Id.String())
 	for {
 		msg, err := pubsub.ReceiveMessage(ctx)
