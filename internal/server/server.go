@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/golang/protobuf/proto"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 type SimpleMessage struct {
@@ -22,11 +22,12 @@ type Server struct {
 	Rdb      *redis.Client
 	Incoming chan *packet.Packet
 	Outgoing chan *packet.Packet
+	Logger   *zap.SugaredLogger
 }
 
 var ctx = context.Background()
 
-func NewServer(name string, uri string) (*Server, error) {
+func NewServer(name string, uri string, logger *zap.SugaredLogger) (*Server, error) {
 	opt, err := redis.ParseURL(uri)
 	if err != nil {
 		return nil, err
@@ -42,6 +43,7 @@ func NewServer(name string, uri string) (*Server, error) {
 		Rdb:      redis.NewClient(opt),
 		Incoming: make(chan *packet.Packet),
 		Outgoing: make(chan *packet.Packet),
+		Logger:   logger,
 	}, nil
 }
 
@@ -91,7 +93,7 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 		} else {
 			resp.Success = true
 			serv.PutSession(sender, session)
-			log.Printf("Client %s has connected.", sender.String())
+			serv.Logger.Infof("Client %s has connected.", sender.String())
 		}
 	}
 	serv.Outgoing <- &resp
@@ -126,8 +128,8 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 }
 
 func (serv *Server) HandleInput(sender uuid.UUID, payload []byte) {
-    // Any input goes directly to the session; no response packet necessary
-    // If the input fails to be written to the session, terminate the client
+	// Any input goes directly to the session; no response packet necessary
+	// If the input fails to be written to the session, terminate the client
 	session := serv.GetSession(sender)
 	if session != nil {
 		written, err := session.Send(payload)
@@ -138,7 +140,7 @@ func (serv *Server) HandleInput(sender uuid.UUID, payload []byte) {
 }
 
 func (serv *Server) HandlePty(sender uuid.UUID, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
-    // Again, the resize event goes directly to the session
+	// Again, the resize event goes directly to the session
 	session := serv.GetSession(sender)
 	if session != nil {
 		session.Resize(rows, cols, xpixels, ypixels)
@@ -146,10 +148,10 @@ func (serv *Server) HandlePty(sender uuid.UUID, rows uint32, cols uint32, xpixel
 }
 
 func (serv *Server) HandleExit(sender uuid.UUID, err error) {
-    // Clean up any session state between the server and the client
+	// Clean up any session state between the server and the client
 	serv.DeleteSession(sender)
-    // Send an acknowledgement back to the client to indicate that we have 
-    // closed the session on the server's end
+	// Send an acknowledgement back to the client to indicate that we have
+	// closed the session on the server's end
 	resp := packet.Packet{}
 	resp.Type = packet.Packet_SERVER_EXIT
 	resp.Sender = serv.Id[:]
@@ -160,14 +162,14 @@ func (serv *Server) HandleExit(sender uuid.UUID, err error) {
 	} else {
 		resp.Success = true
 	}
-	log.Printf("Client %s has disconnected.", sender.String())
+	serv.Logger.Infof("Client %s has disconnected.", sender.String())
 	serv.Outgoing <- &resp
 }
 
 func (serv *Server) StartTimeoutHandler() {
-    // Runs every 30 seconds and performs a sweep through the sessions to
-    // make sure none are expired (last packet received >10 minutes ago)
-    log.Println("Timeout handler is online")
+	// Runs every 30 seconds and performs a sweep through the sessions to
+	// make sure none are expired (last packet received >10 minutes ago)
+	serv.Logger.Info("Timeout handler is online")
 	expiryCheck := func(k interface{}, v interface{}) bool {
 		sender, _ := k.(uuid.UUID)
 		session, _ := k.(*Session)
@@ -183,13 +185,13 @@ func (serv *Server) StartTimeoutHandler() {
 }
 
 func (serv *Server) StartPacketHandler() {
-    // Any incoming packets over the channel have preliminary
-    // checks performed on them and then are handled by type
-    log.Println("Packet handler is online")
+	// Any incoming packets over the channel have preliminary
+	// checks performed on them and then are handled by type
+	serv.Logger.Info("Packet handler is online")
 	for pckt := range serv.Incoming {
 		recipient, err := uuid.FromBytes(pckt.GetRecipient())
 		if err != nil {
-			log.Printf("Could not interpret incoming recipient ID: %s", err)
+			serv.Logger.Errorf("Could not interpret incoming recipient ID: %s", err)
 			continue
 		}
 		if recipient != serv.Id {
@@ -198,7 +200,7 @@ func (serv *Server) StartPacketHandler() {
 		}
 		sender, err := uuid.FromBytes(pckt.GetSender())
 		if err != nil {
-			log.Printf("Could not interpret incoming sender ID: %s", err)
+			serv.Logger.Errorf("Could not interpret incoming sender ID: %s", err)
 			continue
 		}
 		session := serv.GetSession(sender)
@@ -217,30 +219,30 @@ func (serv *Server) StartPacketHandler() {
 		case packet.Packet_CLIENT_EXIT:
 			serv.HandleExit(sender, nil)
 		default:
-			log.Printf("Received invalid packet from %s.\n", sender.String())
+			serv.Logger.Errorf("Received invalid packet from %s.", sender.String())
 		}
 	}
 }
 
 func (serv *Server) StartPacketSender() {
-    // Any outgoing packets are immediately serialized and then
-    // sent through Redis
-    log.Println("Packet sender is online")
+	// Any outgoing packets are immediately serialized and then
+	// sent through Redis
+	serv.Logger.Info("Packet sender is online")
 	for pckt := range serv.Outgoing {
 		recipient, err := uuid.FromBytes(pckt.GetRecipient())
 		if err != nil {
-			log.Printf("Could not interpret outgoing recipient ID: %s", err)
+			serv.Logger.Errorf("Could not interpret outgoing recipient ID: %s", err)
 			continue
 		}
 		channel := "drsh:" + recipient.String()
 		serial, err := proto.Marshal(pckt)
 		if err != nil {
-			log.Printf("Could not marshal packet: %s", err)
+			serv.Logger.Errorf("Could not marshal packet: %s", err)
 			continue
 		}
 		err = serv.Rdb.Publish(ctx, channel, serial).Err()
 		if err != nil {
-			log.Printf("Unable to publish packet: %s", err)
+			serv.Logger.Errorf("Unable to publish packet: %s", err)
 			continue
 		}
 	}
@@ -251,7 +253,7 @@ func (serv *Server) Start() error {
 	go serv.StartPacketHandler()
 	go serv.StartTimeoutHandler()
 	// Main thread is responsible for parsing messages and passing them off to the packet handler
-    log.Println("Packet receiver is online")
+	serv.Logger.Info("Packet receiver is online")
 	pubsub := serv.Rdb.Subscribe(ctx, "drsh:"+serv.Id.String())
 	for {
 		msg, err := pubsub.ReceiveMessage(ctx)

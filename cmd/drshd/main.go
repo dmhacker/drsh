@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
-	"log"
-    "os"
-    "strings"
+	"os"
+	"strings"
 
 	"github.com/dmhacker/drsh/internal/server"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 )
 
 type ServerConfiguration struct {
@@ -16,12 +16,12 @@ type ServerConfiguration struct {
 }
 
 func main() {
-    // Read in config file and fetch variables
+	// Read in config file and fetch variables
 	if len(os.Args) == 1 {
-        fmt.Printf("Usage: %s [CONFIG]\n", os.Args[0])
+		fmt.Printf("Usage: %s [CONFIG]\n", os.Args[0])
 		return
 	}
-    filename := strings.Join(os.Args[1:], " ")
+	filename := strings.Join(os.Args[1:], " ")
 	viper.SetConfigName(filename)
 	viper.AddConfigPath(".")
 	viper.AutomaticEnv()
@@ -29,19 +29,23 @@ func main() {
 	config := ServerConfiguration{}
 	if err := viper.ReadInConfig(); err != nil {
 		fmt.Println(err)
-        return
+		return
 	}
 	if err := viper.Unmarshal(&config); err != nil {
 		fmt.Println(err)
-        return
+		return
 	}
 
-    // Start the server
-	serv, err := server.NewServer(config.Name, config.Uri)
+	// Start the server
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+    sugar := logger.Sugar()
+	serv, err := server.NewServer(config.Name, config.Uri, sugar)
 	if err != nil {
-		log.Fatalln(err)
+        sugar.Error(err)
+        return
 	}
 	if err = serv.Start(); err != nil {
-		log.Fatalln(err)
+        sugar.Error(err)
 	}
 }
