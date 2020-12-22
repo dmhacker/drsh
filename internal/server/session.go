@@ -2,50 +2,44 @@ package server
 
 import (
 	"os"
-    "os/exec"
-    "errors"
+	"os/exec"
 
 	"github.com/creack/pty"
-    "github.com/dmhacker/drsh/internal/packet"
 )
 
 type Session struct {
-	Pty *os.File
+	Pty         *os.File
 }
 
-func NewSession(sz *pty.Winsize) (error, Session) {
+func NewSession(sz *pty.Winsize) (*Session, error) {
 	cmd := exec.Command("bash")
 	ptmx, err := pty.StartWithSize(cmd, sz)
-	session := Session{
-		Pty: ptmx,
+	if err != nil {
+		return nil, err
 	}
-	return err, session
+	return &Session{
+		Pty:         ptmx,
+	}, nil
 }
 
-func (session *Session) ProcessInput(pckt *packet.Packet) error {
-    switch pcktType := pckt.GetType(); pcktType {
-    case packet.Packet_CLIENT_INPUT:
-        session.Pty.Write(pckt.GetPayload())
-        return nil
-    case packet.Packet_CLIENT_PTY:
-        sz := pty.Winsize {
-            Rows: uint16(pckt.GetPtyRows()),
-            Cols: uint16(pckt.GetPtyCols()),
-            X: uint16(pckt.GetPtyXpixels()),
-            Y: uint16(pckt.GetPtyYpixels()),
-        }
-        pty.Setsize(session.Pty, &sz)
-        return nil
-    default:
-        // Client should not be sending SERVER packets
-        // CLIENT_PING, CLIENT_HANDSHAKE, CLIENT_HEARTBEAT handled upstream
-        return errors.New("Server received invalid packet from client")
+func (session *Session) Send(payload []byte) {
+    session.Pty.Write(payload)
+}
+
+func (session *Session) Resize(rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
+    sz := pty.Winsize{
+        Rows: uint16(rows),
+        Cols: uint16(cols),
+        X:    uint16(xpixels),
+        Y:    uint16(ypixels),
     }
+    pty.Setsize(session.Pty, &sz)
 }
 
-func (session *Session) ReceiveOutput() (error, packet.Packet) {
+func (session *Session) Receive(buffer []byte) (int, error) {
+    return session.Pty.Read(buffer)
 }
 
 func (session *Session) Close() {
-    session.Pty.Close() 
+	session.Pty.Close()
 }

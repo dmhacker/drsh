@@ -47,7 +47,7 @@ func test() error {
 
 	// Copy stdin to the pty and the pty to stdout.
 	go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
-    buf := make([]byte, 1)
+    buf := make([]byte, 1000)
     for {
         n, err := ptmx.Read(buf)
         if err != nil {
@@ -57,7 +57,7 @@ func test() error {
         if n == 0 {
             break
         }
-        fmt.Println(buf)
+        fmt.Println(buf[:n])
     }
 	// _, _ = io.Copy(os.Stdout, ptmx)
 

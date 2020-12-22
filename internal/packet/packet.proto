@@ -23,16 +23,20 @@ message Packet {
 
   // Shared fields
   PacketType type = 1;
-  bytes sender = 2;
-  uint32 seq_num = 3;
-  bytes payload = 4; // Used by CLIENT_INPUT, SERVER_OUTPUT
+  bytes sender = 2; // UUID of sending machine
+  bytes recipient = 3; // UUID of receiving machine
+  uint32 seq_num = 4;
+  bytes payload = 5; // Used by CLIENT_INPUT, SERVER_OUTPUT
   
   // Client only fields
-  uint32 pty_rows = 5;
-  uint32 pty_cols = 6;
-  uint32 pty_xpixels = 7;
-  uint32 pty_ypixels = 8;
+  uint32 pty_rows = 6;
+  uint32 pty_cols = 7;
+  uint32 pty_xpixels = 8;
+  uint32 pty_ypixels = 9;
 
   // Server only fields
-  uint32 ack_seq_num = 9;
+  uint32 ack_seq_num = 10;
+  string name = 11;
+  bool success = 12;
+  string error = 13;
 }
