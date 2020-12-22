@@ -10,33 +10,31 @@ message Packet {
     // and should usually expect a response from the server
     CLIENT_PING = 0;
     CLIENT_HANDSHAKE = 1;
-    CLIENT_HEARTBEAT = 2;
-    CLIENT_INPUT = 3;
-    CLIENT_PTY = 4;
+    CLIENT_INPUT = 2;
+    CLIENT_PTY = 3;
+    CLIENT_EXIT = 4;
     // With the exception of SERVER_OUTPUT, these packets
     // are always a direct response to a client request
     SERVER_PING = 5;
     SERVER_HANDSHAKE = 6;
-    SERVER_HEARTBEAT = 7;
-    SERVER_OUTPUT = 8;
+    SERVER_OUTPUT = 7;
+    SERVER_EXIT = 8;
   }
 
   // Shared fields
   PacketType type = 1;
   bytes sender = 2; // UUID of sending machine
   bytes recipient = 3; // UUID of receiving machine
-  uint32 seq_num = 4;
-  bytes payload = 5; // Used by CLIENT_INPUT, SERVER_OUTPUT
+  bytes payload = 4; // Used by CLIENT_INPUT, SERVER_OUTPUT
   
   // Client only fields
-  uint32 pty_rows = 6;
-  uint32 pty_cols = 7;
-  uint32 pty_xpixels = 8;
-  uint32 pty_ypixels = 9;
+  uint32 pty_rows = 5;
+  uint32 pty_cols = 6;
+  uint32 pty_xpixels = 7;
+  uint32 pty_ypixels = 8;
 
   // Server only fields
-  uint32 ack_seq_num = 10;
-  string name = 11;
-  bool success = 12;
-  string error = 13;
+  string server_name = 9;
+  bool success = 10;
+  string error = 11;
 }

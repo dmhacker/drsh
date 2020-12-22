@@ -3,12 +3,14 @@ package server
 import (
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/creack/pty"
 )
 
 type Session struct {
-	Pty *os.File
+	Pty       *os.File
+	Timestamp time.Time
 }
 
 func NewSession(rows uint32, cols uint32, xpixels uint32, ypixels uint32) (*Session, error) {
@@ -24,12 +26,17 @@ func NewSession(rows uint32, cols uint32, xpixels uint32, ypixels uint32) (*Sess
 		return nil, err
 	}
 	return &Session{
-		Pty: ptmx,
+		Pty:       ptmx,
+		Timestamp: time.Now(),
 	}, nil
 }
 
-func (session *Session) Send(payload []byte) {
-	session.Pty.Write(payload)
+func (session *Session) Record() {
+	session.Timestamp = time.Now()
+}
+
+func (session *Session) Expired() bool {
+	return time.Now().Sub(session.Timestamp).Minutes() >= 10
 }
 
 func (session *Session) Resize(rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
@@ -40,6 +47,10 @@ func (session *Session) Resize(rows uint32, cols uint32, xpixels uint32, ypixels
 		Y:    uint16(ypixels),
 	}
 	pty.Setsize(session.Pty, &sz)
+}
+
+func (session *Session) Send(payload []byte) (int, error) {
+	return session.Pty.Write(payload)
 }
 
 func (session *Session) Receive(buffer []byte) (int, error) {
