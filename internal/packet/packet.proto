@@ -6,19 +6,21 @@ option go_package = "github.com/drsh/internal/packet";
 message Packet {
 
   enum PacketType {
+    // Packet sent on startup to self to make sure receiver is online
+    READY = 0;
     // The client is responsible for initiating most requests
     // and should usually expect a response from the server
-    CLIENT_PING = 0;
-    CLIENT_HANDSHAKE = 1;
-    CLIENT_INPUT = 2;
-    CLIENT_PTY = 3;
-    CLIENT_EXIT = 4;
+    CLIENT_PING = 1;
+    CLIENT_HANDSHAKE = 2;
+    CLIENT_INPUT = 3;
+    CLIENT_PTY = 4;
+    CLIENT_EXIT = 5;
     // With the exception of SERVER_OUTPUT, these packets
     // are always a direct response to a client request
-    SERVER_PING = 5;
-    SERVER_HANDSHAKE = 6;
-    SERVER_OUTPUT = 7;
-    SERVER_EXIT = 8;
+    SERVER_PING = 6;
+    SERVER_HANDSHAKE = 7;
+    SERVER_OUTPUT = 8;
+    SERVER_EXIT = 9;
   }
 
   // Shared fields

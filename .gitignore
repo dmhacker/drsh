@@ -15,4 +15,4 @@
 # vendor/
 
 config
-!config/example.yml
+!config/local.yml

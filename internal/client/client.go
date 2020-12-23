@@ -159,7 +159,7 @@ func (clnt *Client) Start() {
     // Connect to Redis and run background routines
 	go clnt.StartTimeoutHandler()
 	clnt.Proxy.Start()
-    time.Sleep(250 * time.Millisecond) // TODO: Replace delay with channel signals
+    // time.Sleep(250 * time.Millisecond) // TODO: Replace delay with channel signals
     // Send out pings to determine available servers
     clnt.PingAll()
     // Have the client select one of these servers
