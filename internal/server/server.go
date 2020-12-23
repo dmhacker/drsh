@@ -96,7 +96,7 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 				if session != nil {
 					cnt, err := session.Receive(buf)
 					if err != nil {
-						serv.HandleExit(sender, err)
+						serv.HandleExit(sender, err, true)
 					}
 					out := packet.Packet{}
 					out.Type = packet.Packet_SERVER_OUTPUT
@@ -122,7 +122,7 @@ func (serv *Server) HandleInput(sender uuid.UUID, payload []byte) {
 	if session != nil {
 		written, err := session.Send(payload)
 		if err != nil || written != len(payload) {
-			serv.HandleExit(sender, err)
+			serv.HandleExit(sender, err, true)
 		}
 	}
 }
@@ -135,23 +135,25 @@ func (serv *Server) HandlePty(sender uuid.UUID, rows uint32, cols uint32, xpixel
 	}
 }
 
-func (serv *Server) HandleExit(sender uuid.UUID, err error) {
+func (serv *Server) HandleExit(sender uuid.UUID, err error, ack bool) {
 	// Clean up any session state between the server and the client
 	serv.DeleteSession(sender)
 	// Send an acknowledgement back to the client to indicate that we have
 	// closed the session on the server's end
-	resp := packet.Packet{}
-	resp.Type = packet.Packet_SERVER_EXIT
-	resp.Sender = serv.Proxy.Id[:]
-	resp.Recipient = sender[:]
-	if err != nil {
-		resp.Success = false
-		resp.Error = "An error occurred: " + err.Error()
-	} else {
-		resp.Success = true
-	}
+    if ack {
+        resp := packet.Packet{}
+        resp.Type = packet.Packet_SERVER_EXIT
+        resp.Sender = serv.Proxy.Id[:]
+        resp.Recipient = sender[:]
+        if err != nil {
+            resp.Success = false
+            resp.Error = "An error occurred: " + err.Error()
+        } else {
+            resp.Success = true
+        }
+        serv.Proxy.SendPacket(&resp)
+    }
 	serv.Logger.Infof("Client %s has disconnected.", sender.String())
-    serv.Proxy.SendPacket(&resp)
 }
 
 func (serv *Server) HandlePacket(pckt *packet.Packet) {
@@ -170,7 +172,7 @@ func (serv *Server) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_CLIENT_PTY:
 		serv.HandlePty(sender, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
 	case packet.Packet_CLIENT_EXIT:
-		serv.HandleExit(sender, nil)
+		serv.HandleExit(sender, nil, false)
 	default:
 		serv.Logger.Errorf("Received invalid packet from %s.", sender.String())
 	}
@@ -183,7 +185,7 @@ func (serv *Server) StartTimeoutHandler() {
 		sender, _ := k.(uuid.UUID)
 		session, _ := k.(*Session)
 		if session.IsExpired() {
-			serv.HandleExit(sender, nil)
+			serv.HandleExit(sender, nil, true)
 		}
 		return true
 	}
