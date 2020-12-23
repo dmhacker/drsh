@@ -183,7 +183,7 @@ func (serv *Server) StartTimeoutHandler() {
 	// make sure none are expired (last packet received >10 minutes ago)
 	expiryCheck := func(k interface{}, v interface{}) bool {
 		sender, _ := k.(uuid.UUID)
-		session, _ := k.(*Session)
+		session, _ := v.(*Session)
 		if session.IsExpired() {
 			serv.HandleExit(sender, nil, true)
 		}
