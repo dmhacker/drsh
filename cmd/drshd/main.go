@@ -47,8 +47,7 @@ func main() {
         sugar.Error(err)
         return
 	}
+    sugar.Infof("Started server '%s' with ID %s", serv.Name, serv.Proxy.Id.String())
     defer serv.Close()
     serv.Start()
-    sugar.Infof("Started server '%s' with ID %s", serv.Name, serv.Proxy.Id.String())
-    <-make(chan int)
 }

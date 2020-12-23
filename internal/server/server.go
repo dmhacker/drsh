@@ -26,7 +26,7 @@ func NewServer(name string, uri string, logger *zap.SugaredLogger) (*Server, err
 		Sessions: sync.Map{},
 		Logger:   logger,
     }
-    prx, err := proxy.NewRedisProxy(uri, logger, serv.HandlePacket)
+    prx, err := proxy.NewRedisProxy("server", uri, logger, serv.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -60,6 +60,7 @@ func (serv *Server) HandlePing(sender uuid.UUID) {
 	resp.Success = true
 	resp.ServerName = serv.Name
 	serv.Proxy.SendPacket(&resp)
+	serv.Logger.Infof("Client %s has pinged.", sender.String())
 }
 
 func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
@@ -178,7 +179,6 @@ func (serv *Server) HandlePacket(pckt *packet.Packet) {
 func (serv *Server) StartTimeoutHandler() {
 	// Runs every 30 seconds and performs a sweep through the sessions to
 	// make sure none are expired (last packet received >10 minutes ago)
-	serv.Logger.Info("Timeout handler is online")
 	expiryCheck := func(k interface{}, v interface{}) bool {
 		sender, _ := k.(uuid.UUID)
 		session, _ := k.(*Session)
@@ -196,6 +196,7 @@ func (serv *Server) StartTimeoutHandler() {
 func (serv *Server) Start() {
 	go serv.StartTimeoutHandler()
     serv.Proxy.Start()
+    <-make(chan int)
 }
 
 func (serv *Server) Close() {
