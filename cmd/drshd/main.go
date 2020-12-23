@@ -43,12 +43,12 @@ func main() {
 
 	// Start the server
 	serv, err := server.NewServer(config.Name, config.Uri, sugar)
-    sugar.Infof("Started server '%s' with ID %s", serv.Name, serv.Id.String())
 	if err != nil {
         sugar.Error(err)
         return
 	}
-	if err = serv.Start(); err != nil {
-        sugar.Error(err)
-	}
+    defer serv.Close()
+    serv.Start()
+    sugar.Infof("Started server '%s' with ID %s", serv.Name, serv.Proxy.Id.String())
+    <-make(chan int)
 }

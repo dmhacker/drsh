@@ -6,45 +6,32 @@ import (
 	"time"
 
 	"github.com/dmhacker/drsh/internal/packet"
-	"github.com/go-redis/redis/v8"
-	"github.com/golang/protobuf/proto"
+	"github.com/dmhacker/drsh/internal/proxy"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
-type SimpleMessage struct {
-}
-
 type Server struct {
 	Name     string
-	Id       uuid.UUID
 	Sessions sync.Map
-	Rdb      *redis.Client
-	Incoming chan *packet.Packet
-	Outgoing chan *packet.Packet
+	Proxy    *proxy.RedisProxy
 	Logger   *zap.SugaredLogger
 }
 
 var ctx = context.Background()
 
 func NewServer(name string, uri string, logger *zap.SugaredLogger) (*Server, error) {
-	opt, err := redis.ParseURL(uri)
-	if err != nil {
-		return nil, err
-	}
-	id, err := uuid.NewRandom()
-	if err != nil {
-		return nil, err
-	}
-	return &Server{
+    serv := Server{
 		Name:     name,
-		Id:       id,
 		Sessions: sync.Map{},
-		Rdb:      redis.NewClient(opt),
-		Incoming: make(chan *packet.Packet),
-		Outgoing: make(chan *packet.Packet),
 		Logger:   logger,
-	}, nil
+    }
+    prx, err := proxy.NewRedisProxy(uri, logger, serv.HandlePacket)
+	if err != nil {
+		return nil, err
+	}
+    serv.Proxy = prx
+	return &serv, nil
 }
 
 func (serv *Server) GetSession(sender uuid.UUID) *Session {
@@ -68,11 +55,11 @@ func (serv *Server) HandlePing(sender uuid.UUID) {
 	// Send an identical response packet back, only including the server name
 	resp := packet.Packet{}
 	resp.Type = packet.Packet_SERVER_PING
-	resp.Sender = serv.Id[:]
+	resp.Sender = serv.Proxy.Id[:]
 	resp.Recipient = sender[:]
 	resp.Success = true
 	resp.ServerName = serv.Name
-	serv.Outgoing <- &resp
+	serv.Proxy.SendPacket(&resp)
 }
 
 func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
@@ -80,7 +67,7 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 	// based on whether or not user has a session
 	resp := packet.Packet{}
 	resp.Type = packet.Packet_SERVER_HANDSHAKE
-	resp.Sender = serv.Id[:]
+	resp.Sender = serv.Proxy.Id[:]
 	resp.Recipient = sender[:]
 	if hasSession {
 		resp.Success = false
@@ -96,7 +83,7 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 			serv.Logger.Infof("Client %s has connected.", sender.String())
 		}
 	}
-	serv.Outgoing <- &resp
+    serv.Proxy.SendPacket(&resp)
 
 	// Spawn goroutine to start capturing stdout from this session
 	// and convert it into outgoing packets
@@ -112,11 +99,11 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 					}
 					out := packet.Packet{}
 					out.Type = packet.Packet_SERVER_OUTPUT
-					out.Sender = serv.Id[:]
+					out.Sender = serv.Proxy.Id[:]
 					out.Recipient = sender[:]
 					out.Payload = buf[:cnt]
 					out.Success = true
-					serv.Outgoing <- &out
+                    serv.Proxy.SendPacket(&out)
 				} else {
 					// If the session was already cleaned up, we
 					// can just end the goroutine gracefully
@@ -154,7 +141,7 @@ func (serv *Server) HandleExit(sender uuid.UUID, err error) {
 	// closed the session on the server's end
 	resp := packet.Packet{}
 	resp.Type = packet.Packet_SERVER_EXIT
-	resp.Sender = serv.Id[:]
+	resp.Sender = serv.Proxy.Id[:]
 	resp.Recipient = sender[:]
 	if err != nil {
 		resp.Success = false
@@ -163,7 +150,29 @@ func (serv *Server) HandleExit(sender uuid.UUID, err error) {
 		resp.Success = true
 	}
 	serv.Logger.Infof("Client %s has disconnected.", sender.String())
-	serv.Outgoing <- &resp
+    serv.Proxy.SendPacket(&resp)
+}
+
+func (serv *Server) HandlePacket(pckt *packet.Packet) {
+	sender, _ := uuid.FromBytes(pckt.GetSender())
+	session := serv.GetSession(sender)
+	if session != nil {
+		session.RefreshExpiry()
+	}
+	switch pt := pckt.GetType(); pt {
+	case packet.Packet_CLIENT_PING:
+		serv.HandlePing(sender)
+	case packet.Packet_CLIENT_HANDSHAKE:
+		serv.HandleHandshake(sender, session != nil, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
+	case packet.Packet_CLIENT_INPUT:
+		serv.HandleInput(sender, pckt.GetPayload())
+	case packet.Packet_CLIENT_PTY:
+		serv.HandlePty(sender, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
+	case packet.Packet_CLIENT_EXIT:
+		serv.HandleExit(sender, nil)
+	default:
+		serv.Logger.Errorf("Received invalid packet from %s.", sender.String())
+	}
 }
 
 func (serv *Server) StartTimeoutHandler() {
@@ -184,88 +193,11 @@ func (serv *Server) StartTimeoutHandler() {
 	}
 }
 
-func (serv *Server) StartPacketHandler() {
-	// Any incoming packets over the channel have preliminary
-	// checks performed on them and then are handled by type
-	serv.Logger.Info("Packet handler is online")
-	for pckt := range serv.Incoming {
-		recipient, err := uuid.FromBytes(pckt.GetRecipient())
-		if err != nil {
-			serv.Logger.Errorf("Could not interpret incoming recipient ID: %s", err)
-			continue
-		}
-		if recipient != serv.Id {
-			// Silently ignore any packets not intended for us
-			continue
-		}
-		sender, err := uuid.FromBytes(pckt.GetSender())
-		if err != nil {
-			serv.Logger.Errorf("Could not interpret incoming sender ID: %s", err)
-			continue
-		}
-		session := serv.GetSession(sender)
-		if session != nil {
-			session.RefreshExpiry()
-		}
-		switch pt := pckt.GetType(); pt {
-		case packet.Packet_CLIENT_PING:
-			serv.HandlePing(sender)
-		case packet.Packet_CLIENT_HANDSHAKE:
-			serv.HandleHandshake(sender, session != nil, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
-		case packet.Packet_CLIENT_INPUT:
-			serv.HandleInput(sender, pckt.GetPayload())
-		case packet.Packet_CLIENT_PTY:
-			serv.HandlePty(sender, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
-		case packet.Packet_CLIENT_EXIT:
-			serv.HandleExit(sender, nil)
-		default:
-			serv.Logger.Errorf("Received invalid packet from %s.", sender.String())
-		}
-	}
-}
-
-func (serv *Server) StartPacketSender() {
-	// Any outgoing packets are immediately serialized and then
-	// sent through Redis
-	serv.Logger.Info("Packet sender is online")
-	for pckt := range serv.Outgoing {
-		recipient, err := uuid.FromBytes(pckt.GetRecipient())
-		if err != nil {
-			serv.Logger.Errorf("Could not interpret outgoing recipient ID: %s", err)
-			continue
-		}
-		channel := "drsh:" + recipient.String()
-		serial, err := proto.Marshal(pckt)
-		if err != nil {
-			serv.Logger.Errorf("Could not marshal packet: %s", err)
-			continue
-		}
-		err = serv.Rdb.Publish(ctx, channel, serial).Err()
-		if err != nil {
-			serv.Logger.Errorf("Unable to publish packet: %s", err)
-			continue
-		}
-	}
-}
-
-func (serv *Server) Start() error {
-	go serv.StartPacketSender()
-	go serv.StartPacketHandler()
+func (serv *Server) Start() {
 	go serv.StartTimeoutHandler()
-	// Main thread is responsible for parsing messages and passing them off to the packet handler
-	serv.Logger.Info("Packet receiver is online")
-	pubsub := serv.Rdb.Subscribe(ctx, "drsh:"+serv.Id.String())
-	for {
-		msg, err := pubsub.ReceiveMessage(ctx)
-		if err != nil {
-			return err
-		}
-		pckt := packet.Packet{}
-		proto.Unmarshal([]byte(msg.Payload), &pckt)
-		serv.Incoming <- &pckt
-	}
+    serv.Proxy.Start()
 }
 
 func (serv *Server) Close() {
-	serv.Rdb.Close()
+	serv.Proxy.Close()
 }
