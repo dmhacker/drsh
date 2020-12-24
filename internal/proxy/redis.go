@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,22 @@ func NewRedisProxy(category string, uri string, logger *zap.SugaredLogger, handl
 		return nil, err
 	}
 	return &prx, nil
+}
+
+func (prx *RedisProxy) CandidateServers() []uuid.UUID {
+	channels, err := prx.Rdb.PubSubChannels(ctx, "drsh:server:*").Result()
+	if err != nil {
+		prx.Logger.Errorf("Could not obtain Redis channels: %s", err)
+	}
+	servers := make([]uuid.UUID, 0, len(channels))
+	for _, channel := range channels {
+		server, err := uuid.Parse(strings.Split(channel, ":")[2])
+		if err != nil {
+			continue
+		}
+		servers = append(servers, server)
+	}
+	return servers
 }
 
 func (prx *RedisProxy) WaitUntilReady() {

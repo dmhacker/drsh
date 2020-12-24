@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -149,28 +148,20 @@ func (clnt *Client) HandlePacket(pckt *packet.Packet) {
 func (clnt *Client) PingAll() {
 	clnt.Mtx.Lock()
 	defer clnt.Mtx.Unlock()
-	// TODO: Move this logic to the proxy class
-	channels, err := clnt.Proxy.Rdb.PubSubChannels(ctx, "drsh:server:*").Result()
-	if err != nil {
-		clnt.Logger.Fatalf("Could not obtain Redis channels: %s", err)
-	}
 	clnt.Stage = PingStage
-	clnt.PingLeft = len(channels)
-	fmt.Printf("Pinging %d candidate servers. This will take a moment.\n", len(channels))
-	for _, channel := range channels {
-		recipient, err := uuid.Parse(strings.Split(channel, ":")[2])
-		if err != nil {
-			clnt.PingLeft--
-			continue
-		}
+	servers := clnt.Proxy.CandidateServers()
+	fmt.Printf("Pinging %d candidate servers. This will take a moment.\n", len(servers))
+	for _, server := range servers {
 		ping := packet.Packet{
 			Type:      packet.Packet_CLIENT_PING,
 			Sender:    clnt.Proxy.Id[:],
-			Recipient: recipient[:],
+			Recipient: server[:],
 		}
 		clnt.Proxy.SendPacket("server", &ping)
 	}
+	clnt.PingLeft = len(servers)
 	if clnt.PingLeft > 0 {
+		// This goroutine times out the ping if a server takes too long to respond
 		go (func() {
 			time.Sleep(10 * time.Second)
 			clnt.Mtx.Lock()
