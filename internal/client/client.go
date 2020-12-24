@@ -255,13 +255,6 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 				clnt.HandleExit(err, true)
 				break
 			}
-			// Received the CTRL-C interrupt sequence
-			// This doesn't generate a SIGINT in raw mode
-			if cnt == 1 && buf[0] == 3 {
-				os.Stdout.WriteString("^C")
-				clnt.HandleExit(nil, true)
-				break
-			}
 			in := packet.Packet{}
 			in.Type = packet.Packet_CLIENT_INPUT
 			in.Sender = clnt.Proxy.Id[:]
