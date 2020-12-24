@@ -96,10 +96,10 @@ func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32,
 					break
 				}
 				out := packet.Packet{
-					Type:          packet.Packet_SERVER_OUTPUT,
-					Sender:        serv.Proxy.Name,
-					Recipient:     sender,
-					OutputPayload: buf[:cnt],
+					Type:      packet.Packet_SERVER_OUTPUT,
+					Sender:    serv.Proxy.Name,
+					Recipient: sender,
+					Payload:   buf[:cnt],
 				}
 				serv.Proxy.SendPacket("client", &out)
 			} else {
@@ -162,8 +162,8 @@ func (serv *Server) HandlePacket(pckt *packet.Packet) {
 		serv.HandlePing(sender)
 	case packet.Packet_CLIENT_HANDSHAKE:
 		serv.HandleHandshake(sender, session != nil, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
-	case packet.Packet_CLIENT_INPUT:
-		serv.HandleInput(sender, pckt.GetInputPayload())
+	case packet.Packet_CLIENT_OUTPUT:
+		serv.HandleInput(sender, pckt.GetPayload())
 	case packet.Packet_CLIENT_PTY_WINCH:
 		serv.HandlePty(sender, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
 	case packet.Packet_CLIENT_EXIT:

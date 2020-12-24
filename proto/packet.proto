@@ -13,7 +13,7 @@ message Packet {
     // and should usually expect a response from the server
     CLIENT_PING = 1;
     CLIENT_HANDSHAKE = 2;
-    CLIENT_INPUT = 3;
+    CLIENT_OUTPUT = 3;
     CLIENT_PTY_WINCH = 4;
     CLIENT_EXIT = 5;
     // With the exception of SERVER_OUTPUT, these packets
@@ -28,15 +28,15 @@ message Packet {
   PacketType type = 1;
   string sender = 2; // Unique name of sending machine
   string recipient = 3; // Unique name of receiving machine
+  bytes payload = 4; // Used by OUTPUT messages
+  bytes key = 5; // Used by HANDSHAKE messages
   
   // Client only fields
-  bytes input_payload = 4;
-  uint32 pty_rows = 5;
-  uint32 pty_cols = 6;
-  uint32 pty_xpixels = 7;
-  uint32 pty_ypixels = 8;
+  uint32 pty_rows = 6;
+  uint32 pty_cols = 7;
+  uint32 pty_xpixels = 8;
+  uint32 pty_ypixels = 9;
 
   // Server only fields
-  google.protobuf.Duration ping_uptime = 9;
-  bytes output_payload = 10;
+  google.protobuf.Duration ping_uptime = 10;
 }

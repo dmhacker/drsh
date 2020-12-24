@@ -141,7 +141,7 @@ func (clnt *Client) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_SERVER_HANDSHAKE:
 		clnt.HandleHandshake(sender)
 	case packet.Packet_SERVER_OUTPUT:
-		clnt.HandleOutput(sender, pckt.GetOutputPayload())
+		clnt.HandleOutput(sender, pckt.GetPayload())
 	case packet.Packet_SERVER_EXIT:
 		clnt.HandleExit(nil, false)
 	default:
@@ -253,10 +253,10 @@ func (clnt *Client) Connect(name string) {
 				break
 			}
 			in := packet.Packet{
-				Type:         packet.Packet_CLIENT_INPUT,
-				Sender:       clnt.Proxy.Name,
-				Recipient:    clnt.ConnectTo,
-				InputPayload: buf[:cnt],
+				Type:      packet.Packet_CLIENT_OUTPUT,
+				Sender:    clnt.Proxy.Name,
+				Recipient: clnt.ConnectTo,
+				Payload:   buf[:cnt],
 			}
 			clnt.Proxy.SendPacket("server", &in)
 		}
