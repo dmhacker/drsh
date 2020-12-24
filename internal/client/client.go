@@ -81,7 +81,7 @@ func (clnt *Client) HandleOutput(sender uuid.UUID, output []byte) {
 	if clnt.Stage == ConnectStage && sender == clnt.ConnectId {
 		cnt, err := os.Stdout.Write(output)
 		if err != nil || cnt != len(output) {
-			// TODO: Implement exit condition
+			// TODO: Implement cleanup on exit
 		}
 	}
 }
@@ -193,9 +193,27 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 	clnt.Stage = ConnectStage
 	clnt.Mtx.Unlock()
 	fmt.Println("Server has acknowledged connection.")
-	// TODO: Put terminal in raw mode
-	// TODO: Capture SIGWINCH os signals
-	<-make(chan int)
+	// TODO: Capture SIGWINCH os signals and send to server
+    go (func() {
+        oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+        if err != nil {
+            clnt.Logger.Fatalf("Could not put tty into raw mode: %s", err)
+        }
+        defer term.Restore(int(os.Stdin.Fd()), oldState)
+        for {
+            buf := make([]byte, 1024)
+            cnt, err := os.Stdin.Read(buf)
+            if err != nil {
+                // TODO: Implement cleanup on exit
+            }
+            in := packet.Packet{}
+            in.Type = packet.Packet_CLIENT_INPUT
+            in.Sender = clnt.Proxy.Id[:]
+            in.Recipient = clnt.ConnectId[:]
+            in.Payload = buf[:cnt]
+            clnt.Proxy.SendPacket(&in)
+        }
+    })()
 }
 
 func (clnt *Client) StartTimeoutHandler() {
@@ -219,6 +237,7 @@ func (clnt *Client) Start() {
 		return
 	}
 	clnt.Connect(*servId)
+    <-make(chan int)
 }
 
 func (clnt *Client) Close() {
