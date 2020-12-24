@@ -94,7 +94,7 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 			for {
 				session := serv.GetSession(sender)
 				if session != nil {
-					buf := make([]byte, 4096)
+					buf := make([]byte, 2048)
 					cnt, err := session.Receive(buf)
 					if err != nil {
 						// TODO: Send error if error is not a normal stream close

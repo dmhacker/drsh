@@ -249,7 +249,7 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 	// Capture input in packets and send to server
 	go (func() {
 		for {
-			buf := make([]byte, 4096)
+			buf := make([]byte, 2048)
 			cnt, err := os.Stdin.Read(buf)
 			if err != nil {
 				clnt.HandleExit(err, true)
