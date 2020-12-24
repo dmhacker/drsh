@@ -8,24 +8,25 @@ import (
 
 	"github.com/dmhacker/drsh/internal/packet"
 	"github.com/dmhacker/drsh/internal/proxy"
+	"github.com/golang/protobuf/ptypes"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
 type Server struct {
-	Name     string
-	Sessions sync.Map
-	Proxy    *proxy.RedisProxy
-	Logger   *zap.SugaredLogger
+	Properties ServerProperties
+	Sessions   sync.Map
+	Proxy      *proxy.RedisProxy
+	Logger     *zap.SugaredLogger
 }
 
 var ctx = context.Background()
 
 func NewServer(name string, uri string, logger *zap.SugaredLogger) (*Server, error) {
 	serv := Server{
-		Name:     name,
-		Sessions: sync.Map{},
-		Logger:   logger,
+		Properties: NewServerProperties(name),
+		Sessions:   sync.Map{},
+		Logger:     logger,
 	}
 	prx, err := proxy.NewRedisProxy("server", uri, logger, serv.HandlePacket)
 	if err != nil {
@@ -53,69 +54,61 @@ func (serv *Server) DeleteSession(sender uuid.UUID) {
 }
 
 func (serv *Server) HandlePing(sender uuid.UUID) {
-	// Send an identical response packet back, only including the server name
-	resp := packet.Packet{}
-	resp.Type = packet.Packet_SERVER_PING
-	resp.Sender = serv.Proxy.Id[:]
-	resp.Recipient = sender[:]
-	resp.Success = true
-	resp.ServerName = serv.Name
-	serv.Proxy.SendPacket(&resp)
+	// Send an identical response packet back with public server information
+	resp := packet.Packet{
+		Type:       packet.Packet_SERVER_PING,
+		Sender:     serv.Proxy.Id[:],
+		Recipient:  sender[:],
+		PingName:   serv.Properties.Name,
+		PingUptime: ptypes.DurationProto(serv.Properties.Uptime()),
+	}
+	serv.Proxy.SendPacket("client", &resp)
 	serv.Logger.Infof("Client %s has pinged.", sender.String())
 }
 
 func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
-	// Always send back a handshake response but vary success
-	// based on whether or not user has a session
-	resp := packet.Packet{}
-	resp.Type = packet.Packet_SERVER_HANDSHAKE
-	resp.Sender = serv.Proxy.Id[:]
-	resp.Recipient = sender[:]
 	if hasSession {
-		resp.Success = false
-		resp.Error = "You are already connected to this server"
-	} else {
-		session, err := NewSession(rows, cols, xpixels, ypixels)
-		if err != nil {
-			resp.Success = false
-			resp.Error = "An error occurred: " + err.Error()
-		} else {
-			resp.Success = true
-			serv.PutSession(sender, session)
-			serv.Logger.Infof("Client %s has connected.", sender.String())
-		}
+		serv.Logger.Errorw("Client %s is already connected.", sender.String())
+		return
 	}
-	serv.Proxy.SendPacket(&resp)
-
+	session, err := NewSession(rows, cols, xpixels, ypixels)
+	if err != nil {
+		serv.Logger.Errorw("Could not allocate session: %s", err)
+		return
+	}
+	serv.PutSession(sender, session)
+	resp := packet.Packet{
+		Type:      packet.Packet_SERVER_HANDSHAKE,
+		Sender:    serv.Proxy.Id[:],
+		Recipient: sender[:],
+	}
+	serv.Proxy.SendPacket("client", &resp)
+	serv.Logger.Infof("Client %s has connected.", sender.String())
 	// Spawn goroutine to start capturing stdout from this session
-	// and convert it into outgoing packets
-	if resp.Success {
-		go (func() {
-			for {
-				session := serv.GetSession(sender)
-				if session != nil {
-					buf := make([]byte, 2048)
-					cnt, err := session.Receive(buf)
-					if err != nil {
-						// TODO: Send error if error is not a normal stream close
-						serv.HandleExit(sender, nil, true)
-						break
-					}
-					out := packet.Packet{}
-					out.Type = packet.Packet_SERVER_OUTPUT
-					out.Sender = serv.Proxy.Id[:]
-					out.Recipient = sender[:]
-					out.Payload = buf[:cnt]
-					out.Success = true
-					serv.Proxy.SendPacket(&out)
-				} else {
-					// If the session was already cleaned up, we
-					// can just end the goroutine gracefully
+	go (func() {
+		for {
+			session := serv.GetSession(sender)
+			if session != nil {
+				buf := make([]byte, 2048)
+				cnt, err := session.Receive(buf)
+				if err != nil {
+					serv.HandleExit(sender, err, true)
 					break
 				}
+				out := packet.Packet{
+					Type:          packet.Packet_SERVER_OUTPUT,
+					Sender:        serv.Proxy.Id[:],
+					Recipient:     sender[:],
+					OutputPayload: buf[:cnt],
+				}
+				serv.Proxy.SendPacket("client", &out)
+			} else {
+				// If the session was already cleaned up, we
+				// can just end the goroutine gracefully
+				break
 			}
-		})()
-	}
+		}
+	})()
 }
 
 func (serv *Server) HandleInput(sender uuid.UUID, payload []byte) {
@@ -125,8 +118,7 @@ func (serv *Server) HandleInput(sender uuid.UUID, payload []byte) {
 	if session != nil {
 		written, err := session.Send(payload)
 		if err != nil || written != len(payload) {
-			// TODO: Send error if error is not a normal stream close
-			serv.HandleExit(sender, nil, true)
+			serv.HandleExit(sender, err, true)
 		}
 	}
 }
@@ -145,19 +137,18 @@ func (serv *Server) HandleExit(sender uuid.UUID, err error, ack bool) {
 	// Send an acknowledgement back to the client to indicate that we have
 	// closed the session on the server's end
 	if ack {
-		resp := packet.Packet{}
-		resp.Type = packet.Packet_SERVER_EXIT
-		resp.Sender = serv.Proxy.Id[:]
-		resp.Recipient = sender[:]
-		if err != nil {
-			resp.Success = false
-			resp.Error = "An error occurred: " + err.Error()
-		} else {
-			resp.Success = true
+		resp := packet.Packet{
+			Type:      packet.Packet_SERVER_EXIT,
+			Sender:    serv.Proxy.Id[:],
+			Recipient: sender[:],
 		}
-		serv.Proxy.SendPacket(&resp)
+		serv.Proxy.SendPacket("client", &resp)
 	}
-	serv.Logger.Infof("Client %s has disconnected.", sender.String())
+	if err != nil {
+		serv.Logger.Infof("Client %s has disconnected: %s.", sender.String(), err.Error())
+	} else {
+		serv.Logger.Infof("Client %s has disconnected.", sender.String())
+	}
 }
 
 func (serv *Server) HandlePacket(pckt *packet.Packet) {
@@ -166,14 +157,14 @@ func (serv *Server) HandlePacket(pckt *packet.Packet) {
 	if session != nil {
 		session.RefreshExpiry()
 	}
-	switch pt := pckt.GetType(); pt {
+	switch pckt.GetType() {
 	case packet.Packet_CLIENT_PING:
 		serv.HandlePing(sender)
 	case packet.Packet_CLIENT_HANDSHAKE:
 		serv.HandleHandshake(sender, session != nil, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
 	case packet.Packet_CLIENT_INPUT:
-		serv.HandleInput(sender, pckt.GetPayload())
-	case packet.Packet_CLIENT_PTY:
+		serv.HandleInput(sender, pckt.GetInputPayload())
+	case packet.Packet_CLIENT_PTY_WINCH:
 		serv.HandlePty(sender, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
 	case packet.Packet_CLIENT_EXIT:
 		serv.HandleExit(sender, nil, false)

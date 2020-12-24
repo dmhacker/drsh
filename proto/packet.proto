@@ -3,8 +3,9 @@ package packet;
 
 option go_package = "./internal/packet";
 
-message Packet {
+import "google/protobuf/duration.proto";
 
+message Packet {
   enum PacketType {
     // Packet sent on startup to self to make sure receiver is online
     READY = 0;
@@ -13,7 +14,7 @@ message Packet {
     CLIENT_PING = 1;
     CLIENT_HANDSHAKE = 2;
     CLIENT_INPUT = 3;
-    CLIENT_PTY = 4;
+    CLIENT_PTY_WINCH = 4;
     CLIENT_EXIT = 5;
     // With the exception of SERVER_OUTPUT, these packets
     // are always a direct response to a client request
@@ -27,16 +28,16 @@ message Packet {
   PacketType type = 1;
   bytes sender = 2; // UUID of sending machine
   bytes recipient = 3; // UUID of receiving machine
-  bytes payload = 4; // Used by CLIENT_INPUT, SERVER_OUTPUT
   
   // Client only fields
+  bytes input_payload = 4;
   uint32 pty_rows = 5;
   uint32 pty_cols = 6;
   uint32 pty_xpixels = 7;
   uint32 pty_ypixels = 8;
 
   // Server only fields
-  string server_name = 9;
-  bool success = 10;
-  string error = 11;
+  string ping_name = 9;
+  google.protobuf.Duration ping_uptime = 10;
+  bytes output_payload = 11;
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/dmhacker/drsh/internal/packet"
 	"github.com/dmhacker/drsh/internal/proxy"
+	"github.com/dmhacker/drsh/internal/server"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"golang.org/x/term"
@@ -33,13 +34,11 @@ type Client struct {
 	Logger           *zap.SugaredLogger
 	Mtx              sync.Mutex
 	Cnd              *sync.Cond
-	PingNames        map[uuid.UUID]string
+	PingInfo         map[uuid.UUID]server.ServerProperties
 	PingLeft         int
 	ConnectTimestamp time.Time
 	ConnectId        uuid.UUID
 	HandshakeChan    chan bool
-	KillChan         chan os.Signal
-	WinchChan        chan os.Signal
 	DoneChan         chan bool
 }
 
@@ -50,10 +49,8 @@ func NewClient(uri string, logger *zap.SugaredLogger) (*Client, error) {
 		Stage:         PingStage,
 		Logger:        logger,
 		Mtx:           sync.Mutex{},
-		PingNames:     make(map[uuid.UUID]string),
+		PingInfo:      make(map[uuid.UUID]server.ServerProperties),
 		HandshakeChan: make(chan bool),
-		KillChan:      make(chan os.Signal),
-		WinchChan:     make(chan os.Signal),
 		DoneChan:      make(chan bool),
 	}
 	clnt.Cnd = sync.NewCond(&clnt.Mtx)
@@ -77,11 +74,11 @@ func (clnt *Client) TerminalSize() *pty.Winsize {
 	return ws
 }
 
-func (clnt *Client) HandlePing(sender uuid.UUID, serverName string) {
+func (clnt *Client) HandlePing(sender uuid.UUID, properties server.ServerProperties) {
 	clnt.Mtx.Lock()
 	defer clnt.Mtx.Unlock()
+	clnt.PingInfo[sender] = properties
 	if clnt.Stage == PingStage {
-		clnt.PingNames[sender] = serverName
 		clnt.PingLeft--
 		if clnt.PingLeft == 0 {
 			clnt.Cnd.Signal()
@@ -110,16 +107,17 @@ func (clnt *Client) HandleOutput(sender uuid.UUID, output []byte) {
 
 func (clnt *Client) HandleExit(err error, ack bool) {
 	if ack {
-		resp := packet.Packet{}
-		resp.Type = packet.Packet_CLIENT_EXIT
-		resp.Sender = clnt.Proxy.Id[:]
-		resp.Recipient = clnt.ConnectId[:]
-		clnt.Proxy.SendPacket(&resp)
+		resp := packet.Packet{
+			Type:      packet.Packet_CLIENT_EXIT,
+			Sender:    clnt.Proxy.Id[:],
+			Recipient: clnt.ConnectId[:],
+		}
+		clnt.Proxy.SendPacket("server", &resp)
 		// Add a slight delay so the disconnect packet can send
 		time.Sleep(100 * time.Millisecond)
 	}
 	if err != nil {
-		fmt.Printf("An error occurred: %s\n", err)
+		fmt.Printf("An error occurred on exit: %s\n", err)
 	}
 	clnt.DoneChan <- true
 }
@@ -131,19 +129,18 @@ func (clnt *Client) HandlePacket(pckt *packet.Packet) {
 		clnt.ConnectTimestamp = time.Now()
 	}
 	clnt.Mtx.Unlock()
-	switch pt := pckt.GetType(); pt {
+	switch pckt.GetType() {
 	case packet.Packet_SERVER_PING:
-		clnt.HandlePing(sender, pckt.GetServerName())
+		clnt.HandlePing(sender, server.ServerProperties{
+			Name:      pckt.GetPingName(),
+			StartedAt: time.Now().Add(-1 * pckt.GetPingUptime().AsDuration()),
+		})
 	case packet.Packet_SERVER_HANDSHAKE:
 		clnt.HandleHandshake(sender)
 	case packet.Packet_SERVER_OUTPUT:
-		clnt.HandleOutput(sender, pckt.GetPayload())
+		clnt.HandleOutput(sender, pckt.GetOutputPayload())
 	case packet.Packet_SERVER_EXIT:
-		if pckt.GetSuccess() {
-			clnt.HandleExit(nil, false)
-		} else {
-			clnt.HandleExit(fmt.Errorf(pckt.GetError()), false)
-		}
+		clnt.HandleExit(nil, false)
 	default:
 		clnt.Logger.Errorf("Received invalid packet from %s.", sender.String())
 	}
@@ -152,6 +149,7 @@ func (clnt *Client) HandlePacket(pckt *packet.Packet) {
 func (clnt *Client) PingAll() {
 	clnt.Mtx.Lock()
 	defer clnt.Mtx.Unlock()
+	// TODO: Move this logic to the proxy class
 	channels, err := clnt.Proxy.Rdb.PubSubChannels(ctx, "drsh:server:*").Result()
 	if err != nil {
 		clnt.Logger.Fatalf("Could not obtain Redis channels: %s", err)
@@ -165,11 +163,12 @@ func (clnt *Client) PingAll() {
 			clnt.PingLeft--
 			continue
 		}
-		ping := packet.Packet{}
-		ping.Type = packet.Packet_CLIENT_PING
-		ping.Sender = clnt.Proxy.Id[:]
-		ping.Recipient = recipient[:]
-		clnt.Proxy.SendPacket(&ping)
+		ping := packet.Packet{
+			Type:      packet.Packet_CLIENT_PING,
+			Sender:    clnt.Proxy.Id[:],
+			Recipient: recipient[:],
+		}
+		clnt.Proxy.SendPacket("server", &ping)
 	}
 	if clnt.PingLeft > 0 {
 		go (func() {
@@ -185,16 +184,16 @@ func (clnt *Client) PingAll() {
 func (clnt *Client) SelectServer() *uuid.UUID {
 	clnt.Mtx.Lock()
 	defer clnt.Mtx.Unlock()
-	if len(clnt.PingNames) == 0 {
+	if len(clnt.PingInfo) == 0 {
 		fmt.Println("No available servers.")
 		return nil
 	}
 	clnt.Stage = SelectStage
-	selections := make([]uuid.UUID, len(clnt.PingNames))
+	selections := make([]uuid.UUID, len(clnt.PingInfo))
 	fmt.Println("Available servers:")
 	i := 0
-	for servId, servName := range clnt.PingNames {
-		fmt.Printf("%d) %s (%s)\n", i+1, servName, servId.String())
+	for servId, servInfo := range clnt.PingInfo {
+		fmt.Printf("%d) %s (%s uptime)\n", i+1, servInfo.Name, servInfo.Uptime().String())
 		selections[i] = servId
 		i++
 	}
@@ -215,35 +214,38 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 	clnt.Mtx.Lock()
 	clnt.Stage = HandshakeStage
 	clnt.ConnectId = servId
-	handshake := packet.Packet{}
-	handshake.Type = packet.Packet_CLIENT_HANDSHAKE
-	handshake.Sender = clnt.Proxy.Id[:]
-	handshake.Recipient = clnt.ConnectId[:]
 	ws := clnt.TerminalSize()
-	handshake.PtyRows = uint32(ws.Rows)
-	handshake.PtyCols = uint32(ws.Cols)
-	handshake.PtyXpixels = uint32(ws.X)
-	handshake.PtyYpixels = uint32(ws.Y)
-	clnt.Proxy.SendPacket(&handshake)
+	handshake := packet.Packet{
+		Type:       packet.Packet_CLIENT_HANDSHAKE,
+		Sender:     clnt.Proxy.Id[:],
+		Recipient:  clnt.ConnectId[:],
+		PtyRows:    uint32(ws.Rows),
+		PtyCols:    uint32(ws.Cols),
+		PtyXpixels: uint32(ws.X),
+		PtyYpixels: uint32(ws.Y),
+	}
+	clnt.Proxy.SendPacket("server", &handshake)
 	clnt.Mtx.Unlock()
 	<-clnt.HandshakeChan
 	clnt.Mtx.Lock()
 	clnt.Stage = ConnectStage
 	clnt.Mtx.Unlock()
-	signal.Notify(clnt.WinchChan, syscall.SIGWINCH)
 	// Capture SIGWINCH signals
+	winchChan := make(chan os.Signal)
+	signal.Notify(winchChan, syscall.SIGWINCH)
 	go (func() {
-		for range clnt.WinchChan {
-			winch := packet.Packet{}
-			winch.Type = packet.Packet_CLIENT_PTY
-			winch.Sender = clnt.Proxy.Id[:]
-			winch.Recipient = clnt.ConnectId[:]
+		for range winchChan {
 			ws := clnt.TerminalSize()
-			winch.PtyRows = uint32(ws.Rows)
-			winch.PtyCols = uint32(ws.Cols)
-			winch.PtyXpixels = uint32(ws.X)
-			winch.PtyYpixels = uint32(ws.Y)
-			clnt.Proxy.SendPacket(&winch)
+			winch := packet.Packet{
+				Type:       packet.Packet_CLIENT_PTY_WINCH,
+				Sender:     clnt.Proxy.Id[:],
+				Recipient:  clnt.ConnectId[:],
+				PtyRows:    uint32(ws.Rows),
+				PtyCols:    uint32(ws.Cols),
+				PtyXpixels: uint32(ws.X),
+				PtyYpixels: uint32(ws.Y),
+			}
+			clnt.Proxy.SendPacket("server", &winch)
 		}
 	})()
 	// Capture input in packets and send to server
@@ -255,12 +257,13 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 				clnt.HandleExit(err, true)
 				break
 			}
-			in := packet.Packet{}
-			in.Type = packet.Packet_CLIENT_INPUT
-			in.Sender = clnt.Proxy.Id[:]
-			in.Recipient = clnt.ConnectId[:]
-			in.Payload = buf[:cnt]
-			clnt.Proxy.SendPacket(&in)
+			in := packet.Packet{
+				Type:         packet.Packet_CLIENT_INPUT,
+				Sender:       clnt.Proxy.Id[:],
+				Recipient:    clnt.ConnectId[:],
+				InputPayload: buf[:cnt],
+			}
+			clnt.Proxy.SendPacket("server", &in)
 		}
 	})()
 }
