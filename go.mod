@@ -3,6 +3,7 @@ module github.com/dmhacker/drsh
 go 1.15
 
 require (
+	github.com/astromechza/etcpwdparse v0.0.0-20170319193008-f0e5f0779716
 	github.com/creack/pty v1.1.11
 	github.com/go-redis/redis/v8 v8.4.4
 	github.com/golang/protobuf v1.4.2

@@ -3,8 +3,11 @@ package server
 import (
 	"os"
 	"os/exec"
+	"os/user"
+	"strconv"
 	"time"
 
+	"github.com/astromechza/etcpwdparse"
 	"github.com/creack/pty"
 )
 
@@ -14,13 +17,30 @@ type Session struct {
 }
 
 func NewSession(rows uint32, cols uint32, xpixels uint32, ypixels uint32) (*Session, error) {
+	// TODO: In the future, the client will decide which user they will log in as
+	// For now, just assume that the user is the person running drshd
+	usr, err := user.Current()
+	if err != nil {
+		return nil, err
+	}
+	uid, err := strconv.Atoi(usr.Uid)
+	if err != nil {
+		return nil, err
+	}
+	// Extract the shell that the user is using
+	cache, err := etcpwdparse.NewLoadedEtcPasswdCache()
+	if err != nil {
+		return nil, err
+	}
+	entry, _ := cache.LookupUserByUid(uid)
+	shell := entry.Shell()
+	cmd := exec.Command(shell)
 	sz := pty.Winsize{
 		Rows: uint16(rows),
 		Cols: uint16(cols),
 		X:    uint16(xpixels),
 		Y:    uint16(ypixels),
 	}
-	cmd := exec.Command("bash")
 	ptmx, err := pty.StartWithSize(cmd, &sz)
 	if err != nil {
 		return nil, err
