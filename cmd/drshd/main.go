@@ -11,8 +11,8 @@ import (
 )
 
 type ServerConfiguration struct {
-	Name string
-	Uri  string
+	Name     string
+	RedisUri string
 }
 
 func main() {
@@ -36,18 +36,18 @@ func main() {
 		return
 	}
 
-    // Start the logger
+	// Start the logger
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync()
-    sugar := logger.Sugar()
+	sugar := logger.Sugar()
 
 	// Start the server
-	serv, err := server.NewServer(config.Name, config.Uri, sugar)
+	serv, err := server.NewServer(config.Name, config.RedisUri, sugar)
 	if err != nil {
-        sugar.Error(err)
-        return
+		sugar.Error(err)
+		return
 	}
-    sugar.Infof("Started server '%s' with ID %s", serv.Properties.Name, serv.Proxy.Id.String())
-    defer serv.Close()
-    serv.Start()
+	sugar.Infof("Started server '%s' with ID %s", serv.Properties.Name, serv.Proxy.Id.String())
+	defer serv.Close()
+	serv.Start()
 }

@@ -1,0 +1,2 @@
+Name: "default-server"
+RedisUri: "redis://localhost:6379"

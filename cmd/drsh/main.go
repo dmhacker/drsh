@@ -11,7 +11,7 @@ import (
 )
 
 type ClientConfiguration struct {
-	Uri  string
+	RedisUri string
 }
 
 func main() {
@@ -35,17 +35,17 @@ func main() {
 		return
 	}
 
-    // Start the logger
+	// Start the logger
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync()
-    sugar := logger.Sugar()
+	sugar := logger.Sugar()
 
 	// Start the client
-	clnt, err := client.NewClient(config.Uri, sugar)
+	clnt, err := client.NewClient(config.RedisUri, sugar)
 	if err != nil {
-        sugar.Error(err)
-        return
+		sugar.Error(err)
+		return
 	}
-    defer clnt.Close()
-    clnt.Start()
+	defer clnt.Close()
+	clnt.Start()
 }
