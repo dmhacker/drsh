@@ -42,7 +42,9 @@ func main() {
 	sugar := logger.Sugar()
 
 	// Start the server
-	serv, err := server.NewServer(config.Name, config.RedisUri, sugar)
+	name := os.ExpandEnv(config.Name)
+	uri := os.ExpandEnv(config.RedisUri)
+	serv, err := server.NewServer(name, uri, sugar)
 	if err != nil {
 		sugar.Error(err)
 		return

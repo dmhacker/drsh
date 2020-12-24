@@ -1,2 +1,2 @@
-Name: "default-server"
+Name: "${HOST}"
 RedisUri: "redis://localhost:6379"

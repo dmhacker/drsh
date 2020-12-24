@@ -15,4 +15,4 @@
 # vendor/
 
 config/*.yml
-!config/drshd_config.def.yml
+!config/drshd_config.yml
