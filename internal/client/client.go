@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/dmhacker/drsh/internal/packet"
@@ -31,10 +33,12 @@ type Client struct {
 	Cnd              *sync.Cond
 	PingNames        map[uuid.UUID]string
 	PingLeft         int
-	HandshakeChan    chan bool
 	ConnectTimestamp time.Time
 	ConnectId        uuid.UUID
-	OldTerminal      *term.State
+	HandshakeChan    chan bool
+	KillChan         chan os.Signal
+	WinchChan        chan os.Signal
+	DoneChan         chan bool
 }
 
 var ctx = context.Background()
@@ -46,6 +50,9 @@ func NewClient(uri string, logger *zap.SugaredLogger) (*Client, error) {
 		Mtx:           sync.Mutex{},
 		PingNames:     make(map[uuid.UUID]string),
 		HandshakeChan: make(chan bool),
+		KillChan:      make(chan os.Signal),
+		WinchChan:     make(chan os.Signal),
+		DoneChan:      make(chan bool),
 	}
 	clnt.Cnd = sync.NewCond(&clnt.Mtx)
 	prx, err := proxy.NewRedisProxy("client", uri, logger, clnt.HandlePacket)
@@ -89,13 +96,10 @@ func (clnt *Client) HandleOutput(sender uuid.UUID, output []byte) {
 
 func (clnt *Client) HandleExit(err error, ack bool) {
 	// TODO: Send ack to client if necessary
-	term.Restore(int(os.Stdin.Fd()), clnt.OldTerminal)
 	if err != nil {
 		fmt.Printf("An error occurred: %s\n", err)
-		os.Exit(1)
-	} else {
-		os.Exit(0)
 	}
+	clnt.DoneChan <- true
 }
 
 func (clnt *Client) HandlePacket(pckt *packet.Packet) {
@@ -204,26 +208,42 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 	clnt.Mtx.Lock()
 	clnt.Stage = ConnectStage
 	clnt.Mtx.Unlock()
-	fmt.Println("Server has acknowledged connection.")
-	// Capture SIGWINCH signals
+	// Capture SIGINT signals
+	signal.Notify(clnt.KillChan, syscall.SIGINT)
+	signal.Notify(clnt.KillChan, syscall.SIGTERM)
+	signal.Notify(clnt.KillChan, syscall.SIGQUIT)
+	signal.Notify(clnt.WinchChan, syscall.SIGWINCH)
 	go (func() {
-
+		<-clnt.KillChan
+		clnt.HandleExit(nil, true)
 	})()
 	// Capture SIGWINCH signals
 	go (func() {
-
+		for range clnt.WinchChan {
+			winch := packet.Packet{}
+			winch.Type = packet.Packet_CLIENT_PTY
+			winch.Sender = clnt.Proxy.Id[:]
+			winch.Recipient = clnt.ConnectId[:]
+			rows, cols, err := term.GetSize(int(os.Stdin.Fd()))
+			if err != nil {
+				clnt.Mtx.Unlock()
+				clnt.Logger.Fatalf("Could not obtain tty dimensions: %s", err)
+			}
+			winch.PtyRows = uint32(rows)
+			winch.PtyCols = uint32(cols)
+			winch.PtyXpixels = 80
+			winch.PtyYpixels = 24
+			clnt.Proxy.SendPacket(&winch)
+		}
 	})()
 	// Capture input in packets and send to server
 	go (func() {
-        clnt.OldTerminal, err = term.MakeRaw(int(os.Stdin.Fd()))
-		if err != nil {
-			clnt.Logger.Fatalf("Could not put tty into raw mode: %s", err)
-		}
 		for {
 			buf := make([]byte, 1024)
 			cnt, err := os.Stdin.Read(buf)
 			if err != nil {
 				clnt.HandleExit(err, true)
+				break
 			}
 			in := packet.Packet{}
 			in.Type = packet.Packet_CLIENT_INPUT
@@ -239,7 +259,14 @@ func (clnt *Client) StartTimeoutHandler() {
 	// Runs every 30 seconds and performs a check to make sure server
 	// has not timed out (last packet received >10 minutes ago)
 	for {
-		// TODO: Implement
+		clnt.Mtx.Lock()
+		stage := clnt.Stage
+		timestamp := clnt.ConnectTimestamp
+		clnt.Mtx.Unlock()
+		if stage == ConnectStage && time.Now().Sub(timestamp).Minutes() >= 10 {
+			clnt.HandleExit(fmt.Errorf("server timed out"), true)
+			break
+		}
 		time.Sleep(30 * time.Second)
 	}
 }
@@ -255,8 +282,16 @@ func (clnt *Client) Start() {
 	if servId == nil {
 		return
 	}
+	// Put the current tty into raw mode and revert on exit
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		clnt.Logger.Fatalf("Could not put tty into raw mode: %s", err)
+	}
+	defer term.Restore(int(os.Stdin.Fd()), oldState)
+	// Connect to the specified server
 	clnt.Connect(*servId)
-	<-make(chan int)
+	// Wait until at least one thread messages the done channel
+	<-clnt.DoneChan
 }
 
 func (clnt *Client) Close() {

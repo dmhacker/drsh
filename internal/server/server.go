@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -97,6 +98,7 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 					cnt, err := session.Receive(buf)
 					if err != nil {
 						serv.HandleExit(sender, err, true)
+						break
 					}
 					out := packet.Packet{}
 					out.Type = packet.Packet_SERVER_OUTPUT
@@ -185,7 +187,7 @@ func (serv *Server) StartTimeoutHandler() {
 		sender, _ := k.(uuid.UUID)
 		session, _ := v.(*Session)
 		if session.IsExpired() {
-			serv.HandleExit(sender, nil, true)
+			serv.HandleExit(sender, fmt.Errorf("client timed out"), true)
 		}
 		return true
 	}
