@@ -97,7 +97,8 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 					buf := make([]byte, 1024)
 					cnt, err := session.Receive(buf)
 					if err != nil {
-						serv.HandleExit(sender, err, true)
+                        // TODO: Send error if error is not a normal stream close
+						serv.HandleExit(sender, nil, true)
 						break
 					}
 					out := packet.Packet{}
@@ -124,7 +125,8 @@ func (serv *Server) HandleInput(sender uuid.UUID, payload []byte) {
 	if session != nil {
 		written, err := session.Send(payload)
 		if err != nil || written != len(payload) {
-			serv.HandleExit(sender, err, true)
+            // TODO: Send error if error is not a normal stream close
+			serv.HandleExit(sender, nil, true)
 		}
 	}
 }

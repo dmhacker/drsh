@@ -95,7 +95,13 @@ func (clnt *Client) HandleOutput(sender uuid.UUID, output []byte) {
 }
 
 func (clnt *Client) HandleExit(err error, ack bool) {
-	// TODO: Send ack to client if necessary
+    if ack {
+        resp := packet.Packet{}
+        resp.Type = packet.Packet_CLIENT_EXIT
+        resp.Sender = clnt.Proxy.Id[:]
+        resp.Recipient = clnt.ConnectId[:]
+        clnt.Proxy.SendPacket(&resp)
+    }
 	if err != nil {
 		fmt.Printf("An error occurred: %s\n", err)
 	}
@@ -117,7 +123,11 @@ func (clnt *Client) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_SERVER_OUTPUT:
 		clnt.HandleOutput(sender, pckt.GetPayload())
 	case packet.Packet_SERVER_EXIT:
-		clnt.HandleExit(nil, false)
+        if pckt.GetSuccess() {
+		    clnt.HandleExit(nil, false)
+        } else {
+		    clnt.HandleExit(fmt.Errorf(pckt.GetError()), false)
+        }
 	default:
 		clnt.Logger.Errorf("Received invalid packet from %s.", sender.String())
 	}
@@ -208,15 +218,7 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 	clnt.Mtx.Lock()
 	clnt.Stage = ConnectStage
 	clnt.Mtx.Unlock()
-	// Capture SIGINT signals
-	signal.Notify(clnt.KillChan, syscall.SIGINT)
-	signal.Notify(clnt.KillChan, syscall.SIGTERM)
-	signal.Notify(clnt.KillChan, syscall.SIGQUIT)
 	signal.Notify(clnt.WinchChan, syscall.SIGWINCH)
-	go (func() {
-		<-clnt.KillChan
-		clnt.HandleExit(nil, true)
-	})()
 	// Capture SIGWINCH signals
 	go (func() {
 		for range clnt.WinchChan {
@@ -244,6 +246,13 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 			if err != nil {
 				clnt.HandleExit(err, true)
 				break
+			}
+            // Received the CTRL-C interrupt sequence
+            // This doesn't generate a SIGINT in raw mode
+			if cnt == 1 && buf[0] == 3 {
+                os.Stdout.WriteString("^C")
+				clnt.HandleExit(nil, true)
+                break
 			}
 			in := packet.Packet{}
 			in.Type = packet.Packet_CLIENT_INPUT
