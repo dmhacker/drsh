@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -19,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/monnand/dhkx"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/term"
 )
 
@@ -43,7 +46,7 @@ type Client struct {
 	DoneChan         chan bool
 	Group            *dhkx.DHGroup
 	PrivateKey       *dhkx.DHKey
-	SharedKey        []byte
+	Cipher           cipher.AEAD
 }
 
 var ctx = context.Background()
@@ -113,17 +116,26 @@ func (clnt *Client) HandleHandshake(sender string, key []byte) {
 		if err != nil {
 			clnt.Logger.Fatalf("Received invalid key from server: %s", err)
 		}
-		clnt.SharedKey = skey.Bytes()
+		// TODO: Are there issues with only using the first 32 bytes?
+		clnt.Cipher, err = chacha20poly1305.New(skey.Bytes()[:chacha20poly1305.KeySize])
+		if err != nil {
+			clnt.Logger.Fatalf("Unable to create cipher: %s", err)
+		}
 		clnt.HandshakeChan <- true
 	}
 }
 
-func (clnt *Client) HandleOutput(sender string, output []byte) {
+func (clnt *Client) HandleOutput(sender string, payload []byte, nonce []byte) {
 	clnt.Mtx.Lock()
 	defer clnt.Mtx.Unlock()
 	if clnt.Stage == ConnectStage && sender == clnt.ConnectTo {
-		cnt, err := os.Stdout.Write(output)
-		if err != nil || cnt != len(output) {
+		plaintext, err := clnt.Cipher.Open(nil, nonce, payload, nil)
+		if err != nil {
+			clnt.HandleExit(err, true)
+			return
+		}
+		_, err = os.Stdout.Write(plaintext)
+		if err != nil {
 			clnt.HandleExit(err, true)
 		}
 	}
@@ -161,7 +173,7 @@ func (clnt *Client) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_SERVER_HANDSHAKE:
 		clnt.HandleHandshake(sender, pckt.GetKey())
 	case packet.Packet_SERVER_OUTPUT:
-		clnt.HandleOutput(sender, pckt.GetPayload())
+		clnt.HandleOutput(sender, pckt.GetPayload(), pckt.GetNonce())
 	case packet.Packet_SERVER_EXIT:
 		clnt.HandleExit(nil, false)
 	default:
@@ -273,11 +285,19 @@ func (clnt *Client) Connect(name string) {
 				clnt.HandleExit(err, true)
 				break
 			}
+			nonce := make([]byte, chacha20poly1305.NonceSize)
+			_, err = rand.Read(nonce)
+			if err != nil {
+				clnt.HandleExit(err, true)
+				break
+			}
+			ciphertext := clnt.Cipher.Seal(nil, nonce, buf[:cnt], nil)
 			in := packet.Packet{
 				Type:      packet.Packet_CLIENT_OUTPUT,
 				Sender:    clnt.Proxy.Name,
 				Recipient: clnt.ConnectTo,
-				Payload:   buf[:cnt],
+				Payload:   ciphertext,
+				Nonce:     nonce,
 			}
 			clnt.Proxy.SendPacket("server", &in)
 		}

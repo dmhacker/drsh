@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/golang/protobuf/ptypes"
 	"github.com/monnand/dhkx"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 type Server struct {
@@ -83,7 +85,12 @@ func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32,
 		serv.Logger.Errorw("Received invalid key from client: %s", err)
 		return
 	}
-	session.SharedKey = skey.Bytes()
+	// TODO: Are there issues with only using the first 32 bytes?
+	session.Cipher, err = chacha20poly1305.New(skey.Bytes()[:chacha20poly1305.KeySize])
+	if err != nil {
+		serv.Logger.Errorw("Unable to create cipher: %s", err)
+		return
+	}
 	serv.PutSession(sender, session)
 	resp := packet.Packet{
 		Type:      packet.Packet_SERVER_HANDSHAKE,
@@ -104,11 +111,19 @@ func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32,
 					serv.HandleExit(sender, err, true)
 					break
 				}
+				nonce := make([]byte, chacha20poly1305.NonceSize)
+				_, err = rand.Read(nonce)
+				if err != nil {
+					serv.HandleExit(sender, err, true)
+					break
+				}
+				ciphertext := session.Cipher.Seal(nil, nonce, buf[:cnt], nil)
 				out := packet.Packet{
 					Type:      packet.Packet_SERVER_OUTPUT,
 					Sender:    serv.Proxy.Name,
 					Recipient: sender,
-					Payload:   buf[:cnt],
+					Payload:   ciphertext,
+					Nonce:     nonce,
 				}
 				serv.Proxy.SendPacket("client", &out)
 			} else {
@@ -120,13 +135,17 @@ func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32,
 	})()
 }
 
-func (serv *Server) HandleInput(sender string, payload []byte) {
+func (serv *Server) HandleOutput(sender string, payload []byte, nonce []byte) {
 	// Any input goes directly to the session; no response packet necessary
 	// If the input fails to be written to the session, terminate the client
 	session := serv.GetSession(sender)
 	if session != nil {
-		written, err := session.Send(payload)
-		if err != nil || written != len(payload) {
+		plaintext, err := session.Cipher.Open(nil, nonce, payload, nil)
+		if err != nil {
+			serv.HandleExit(sender, err, true)
+		}
+		_, err = session.Send(plaintext)
+		if err != nil {
 			serv.HandleExit(sender, err, true)
 		}
 	}
@@ -172,7 +191,7 @@ func (serv *Server) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_CLIENT_HANDSHAKE:
 		serv.HandleHandshake(sender, session != nil, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels(), pckt.GetKey())
 	case packet.Packet_CLIENT_OUTPUT:
-		serv.HandleInput(sender, pckt.GetPayload())
+		serv.HandleOutput(sender, pckt.GetPayload(), pckt.GetNonce())
 	case packet.Packet_CLIENT_PTY_WINCH:
 		serv.HandlePty(sender, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
 	case packet.Packet_CLIENT_EXIT:

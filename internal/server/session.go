@@ -6,6 +6,7 @@ import (
 	"os/user"
 	"strconv"
 	"time"
+    "crypto/cipher"
 
 	"github.com/astromechza/etcpwdparse"
 	"github.com/creack/pty"
@@ -17,7 +18,7 @@ type Session struct {
 	Timestamp  time.Time
 	Group      *dhkx.DHGroup
 	PrivateKey *dhkx.DHKey
-	SharedKey  []byte
+    Cipher      cipher.AEAD
 }
 
 func NewSession(rows uint32, cols uint32, xpixels uint32, ypixels uint32) (*Session, error) {
