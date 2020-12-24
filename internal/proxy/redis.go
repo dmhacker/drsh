@@ -22,6 +22,7 @@ type RedisProxy struct {
 	Name      string
 	Category  string
 	Rdb       *redis.Client
+	Rps       *redis.PubSub
 	Incoming  chan *packet.Packet
 	Outgoing  chan CategoryPacket
 	Logger    *zap.SugaredLogger
@@ -64,6 +65,7 @@ func NewRedisProxy(name string, category string, uri string, logger *zap.Sugared
 	if len(check) > 0 {
 		return nil, fmt.Errorf("Another server is already using that name.")
 	}
+	prx.Rps = prx.Rdb.Subscribe(ctx, "drsh:"+prx.Category+":"+prx.Name)
 	return &prx, nil
 }
 
@@ -150,10 +152,8 @@ func (prx *RedisProxy) StartPacketSender() {
 }
 
 func (prx *RedisProxy) StartPacketReceiver() {
-	pubsub := prx.Rdb.Subscribe(ctx, "drsh:"+prx.Category+":"+prx.Name)
-	defer pubsub.Close()
 	for {
-		msg, err := pubsub.ReceiveMessage(ctx)
+		msg, err := prx.Rps.ReceiveMessage(ctx)
 		if err != nil {
 			prx.Logger.Errorf("Unable to receive packet: %s", err)
 			continue
@@ -179,5 +179,6 @@ func (prx *RedisProxy) Start() {
 }
 
 func (prx *RedisProxy) Close() {
+	prx.Rps.Close()
 	prx.Rdb.Close()
 }
