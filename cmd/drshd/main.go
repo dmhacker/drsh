@@ -37,7 +37,7 @@ func main() {
 	}
 
 	// Start the logger
-	logger, _ := zap.NewDevelopment()
+	logger, _ := zap.NewProduction()
 	defer logger.Sync()
 	sugar := logger.Sugar()
 
