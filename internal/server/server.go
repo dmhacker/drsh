@@ -21,16 +21,16 @@ type Server struct {
 var ctx = context.Background()
 
 func NewServer(name string, uri string, logger *zap.SugaredLogger) (*Server, error) {
-    serv := Server{
+	serv := Server{
 		Name:     name,
 		Sessions: sync.Map{},
 		Logger:   logger,
-    }
-    prx, err := proxy.NewRedisProxy("server", uri, logger, serv.HandlePacket)
+	}
+	prx, err := proxy.NewRedisProxy("server", uri, logger, serv.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
-    serv.Proxy = prx
+	serv.Proxy = prx
 	return &serv, nil
 }
 
@@ -84,16 +84,16 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 			serv.Logger.Infof("Client %s has connected.", sender.String())
 		}
 	}
-    serv.Proxy.SendPacket(&resp)
+	serv.Proxy.SendPacket(&resp)
 
 	// Spawn goroutine to start capturing stdout from this session
 	// and convert it into outgoing packets
 	if resp.Success {
 		go (func() {
-			buf := make([]byte, 1024)
 			for {
 				session := serv.GetSession(sender)
 				if session != nil {
+					buf := make([]byte, 1024)
 					cnt, err := session.Receive(buf)
 					if err != nil {
 						serv.HandleExit(sender, err, true)
@@ -104,7 +104,7 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 					out.Recipient = sender[:]
 					out.Payload = buf[:cnt]
 					out.Success = true
-                    serv.Proxy.SendPacket(&out)
+					serv.Proxy.SendPacket(&out)
 				} else {
 					// If the session was already cleaned up, we
 					// can just end the goroutine gracefully
@@ -140,19 +140,19 @@ func (serv *Server) HandleExit(sender uuid.UUID, err error, ack bool) {
 	serv.DeleteSession(sender)
 	// Send an acknowledgement back to the client to indicate that we have
 	// closed the session on the server's end
-    if ack {
-        resp := packet.Packet{}
-        resp.Type = packet.Packet_SERVER_EXIT
-        resp.Sender = serv.Proxy.Id[:]
-        resp.Recipient = sender[:]
-        if err != nil {
-            resp.Success = false
-            resp.Error = "An error occurred: " + err.Error()
-        } else {
-            resp.Success = true
-        }
-        serv.Proxy.SendPacket(&resp)
-    }
+	if ack {
+		resp := packet.Packet{}
+		resp.Type = packet.Packet_SERVER_EXIT
+		resp.Sender = serv.Proxy.Id[:]
+		resp.Recipient = sender[:]
+		if err != nil {
+			resp.Success = false
+			resp.Error = "An error occurred: " + err.Error()
+		} else {
+			resp.Success = true
+		}
+		serv.Proxy.SendPacket(&resp)
+	}
 	serv.Logger.Infof("Client %s has disconnected.", sender.String())
 }
 
@@ -197,8 +197,8 @@ func (serv *Server) StartTimeoutHandler() {
 
 func (serv *Server) Start() {
 	go serv.StartTimeoutHandler()
-    serv.Proxy.Start()
-    <-make(chan int)
+	serv.Proxy.Start()
+	<-make(chan int)
 }
 
 func (serv *Server) Close() {

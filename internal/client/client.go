@@ -2,18 +2,18 @@ package client
 
 import (
 	"context"
-    "os"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-    "golang.org/x/term"
 	"github.com/dmhacker/drsh/internal/packet"
 	"github.com/dmhacker/drsh/internal/proxy"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"golang.org/x/term"
 )
 
 const (
@@ -79,12 +79,11 @@ func (clnt *Client) HandleOutput(sender uuid.UUID, output []byte) {
 	clnt.Mtx.Lock()
 	defer clnt.Mtx.Unlock()
 	if clnt.Stage == ConnectStage && sender == clnt.ConnectId {
-        fmt.Printf("Got output '%v'\n", output)
-        // cnt, err := os.Stdout.Write(output)
-        // if err != nil || cnt != len(output) {
-        //     // TODO: Implement exit condition
-        // }
-    }
+		cnt, err := os.Stdout.Write(output)
+		if err != nil || cnt != len(output) {
+			// TODO: Implement exit condition
+		}
+	}
 }
 
 func (clnt *Client) HandlePacket(pckt *packet.Packet) {
@@ -100,7 +99,7 @@ func (clnt *Client) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_SERVER_HANDSHAKE:
 		clnt.HandleHandshake(sender)
 	case packet.Packet_SERVER_OUTPUT:
-        clnt.HandleOutput(sender, pckt.GetPayload())
+		clnt.HandleOutput(sender, pckt.GetPayload())
 	case packet.Packet_SERVER_EXIT:
 		// TODO: Implement
 	default:
@@ -174,29 +173,29 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 	clnt.Mtx.Lock()
 	clnt.Stage = HandshakeStage
 	clnt.ConnectId = servId
-    rows, cols, err := term.GetSize(int(os.Stdin.Fd()))
-    if err != nil {
-	    clnt.Mtx.Unlock()
+	rows, cols, err := term.GetSize(int(os.Stdin.Fd()))
+	if err != nil {
+		clnt.Mtx.Unlock()
 		clnt.Logger.Fatalf("Could not obtain tty dimensions: %s", err)
-    }
-    handshake := packet.Packet{}
-    handshake.Type = packet.Packet_CLIENT_HANDSHAKE
-    handshake.Sender = clnt.Proxy.Id[:]
-    handshake.Recipient = clnt.ConnectId[:]
-    handshake.PtyRows = uint32(rows)
-    handshake.PtyCols = uint32(cols)
-    handshake.PtyXpixels = 80
-    handshake.PtyYpixels = 24
-    clnt.Proxy.SendPacket(&handshake)
+	}
+	handshake := packet.Packet{}
+	handshake.Type = packet.Packet_CLIENT_HANDSHAKE
+	handshake.Sender = clnt.Proxy.Id[:]
+	handshake.Recipient = clnt.ConnectId[:]
+	handshake.PtyRows = uint32(rows)
+	handshake.PtyCols = uint32(cols)
+	handshake.PtyXpixels = 80
+	handshake.PtyYpixels = 24
+	clnt.Proxy.SendPacket(&handshake)
 	clnt.Mtx.Unlock()
-    <-clnt.HandshakeChan
+	<-clnt.HandshakeChan
 	clnt.Mtx.Lock()
-    clnt.Stage = ConnectStage
+	clnt.Stage = ConnectStage
 	clnt.Mtx.Unlock()
-    fmt.Println("Server has acknowledged connection.")
-    // TODO: Put terminal in raw mode
-    // TODO: Capture SIGWINCH os signals 
-    <-make(chan int)
+	fmt.Println("Server has acknowledged connection.")
+	// TODO: Put terminal in raw mode
+	// TODO: Capture SIGWINCH os signals
+	<-make(chan int)
 }
 
 func (clnt *Client) StartTimeoutHandler() {
@@ -219,7 +218,7 @@ func (clnt *Client) Start() {
 	if servId == nil {
 		return
 	}
-    clnt.Connect(*servId)
+	clnt.Connect(*servId)
 }
 
 func (clnt *Client) Close() {
