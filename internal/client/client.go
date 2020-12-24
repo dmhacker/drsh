@@ -95,13 +95,15 @@ func (clnt *Client) HandleOutput(sender uuid.UUID, output []byte) {
 }
 
 func (clnt *Client) HandleExit(err error, ack bool) {
-    if ack {
-        resp := packet.Packet{}
-        resp.Type = packet.Packet_CLIENT_EXIT
-        resp.Sender = clnt.Proxy.Id[:]
-        resp.Recipient = clnt.ConnectId[:]
-        clnt.Proxy.SendPacket(&resp)
-    }
+	if ack {
+		resp := packet.Packet{}
+		resp.Type = packet.Packet_CLIENT_EXIT
+		resp.Sender = clnt.Proxy.Id[:]
+		resp.Recipient = clnt.ConnectId[:]
+		clnt.Proxy.SendPacket(&resp)
+		// Add a slight delay so the disconnect packet can send
+		time.Sleep(100 * time.Millisecond)
+	}
 	if err != nil {
 		fmt.Printf("An error occurred: %s\n", err)
 	}
@@ -123,11 +125,11 @@ func (clnt *Client) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_SERVER_OUTPUT:
 		clnt.HandleOutput(sender, pckt.GetPayload())
 	case packet.Packet_SERVER_EXIT:
-        if pckt.GetSuccess() {
-		    clnt.HandleExit(nil, false)
-        } else {
-		    clnt.HandleExit(fmt.Errorf(pckt.GetError()), false)
-        }
+		if pckt.GetSuccess() {
+			clnt.HandleExit(nil, false)
+		} else {
+			clnt.HandleExit(fmt.Errorf(pckt.GetError()), false)
+		}
 	default:
 		clnt.Logger.Errorf("Received invalid packet from %s.", sender.String())
 	}
@@ -247,12 +249,12 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 				clnt.HandleExit(err, true)
 				break
 			}
-            // Received the CTRL-C interrupt sequence
-            // This doesn't generate a SIGINT in raw mode
+			// Received the CTRL-C interrupt sequence
+			// This doesn't generate a SIGINT in raw mode
 			if cnt == 1 && buf[0] == 3 {
-                os.Stdout.WriteString("^C")
+				os.Stdout.WriteString("^C")
 				clnt.HandleExit(nil, true)
-                break
+				break
 			}
 			in := packet.Packet{}
 			in.Type = packet.Packet_CLIENT_INPUT
