@@ -9,6 +9,7 @@ import (
 	"github.com/dmhacker/drsh/internal/packet"
 	"github.com/dmhacker/drsh/internal/proxy"
 	"github.com/golang/protobuf/ptypes"
+	"github.com/monnand/dhkx"
 	"go.uber.org/zap"
 )
 
@@ -66,7 +67,7 @@ func (serv *Server) HandlePing(sender string) {
 	serv.Logger.Infof("'%s' has pinged.", sender)
 }
 
-func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
+func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32, cols uint32, xpixels uint32, ypixels uint32, key []byte) {
 	if hasSession {
 		serv.Logger.Errorw("'%s' is already connected.", sender)
 		return
@@ -76,11 +77,19 @@ func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32,
 		serv.Logger.Errorw("Could not allocate session: %s", err)
 		return
 	}
+	pkey := dhkx.NewPublicKey(key)
+	skey, err := session.Group.ComputeKey(pkey, session.PrivateKey)
+	if err != nil {
+		serv.Logger.Errorw("Received invalid key from client: %s", err)
+		return
+	}
+	session.SharedKey = skey.Bytes()
 	serv.PutSession(sender, session)
 	resp := packet.Packet{
 		Type:      packet.Packet_SERVER_HANDSHAKE,
 		Sender:    serv.Proxy.Name,
 		Recipient: sender,
+		Key:       session.PrivateKey.Bytes(),
 	}
 	serv.Proxy.SendPacket("client", &resp)
 	serv.Logger.Infof("'%s' has connected.", sender)
@@ -161,7 +170,7 @@ func (serv *Server) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_CLIENT_PING:
 		serv.HandlePing(sender)
 	case packet.Packet_CLIENT_HANDSHAKE:
-		serv.HandleHandshake(sender, session != nil, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
+		serv.HandleHandshake(sender, session != nil, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels(), pckt.GetKey())
 	case packet.Packet_CLIENT_OUTPUT:
 		serv.HandleInput(sender, pckt.GetPayload())
 	case packet.Packet_CLIENT_PTY_WINCH:

@@ -9,14 +9,26 @@ import (
 
 	"github.com/astromechza/etcpwdparse"
 	"github.com/creack/pty"
+	"github.com/monnand/dhkx"
 )
 
 type Session struct {
-	Pty       *os.File
-	Timestamp time.Time
+	Pty        *os.File
+	Timestamp  time.Time
+	Group      *dhkx.DHGroup
+	PrivateKey *dhkx.DHKey
+	SharedKey  []byte
 }
 
 func NewSession(rows uint32, cols uint32, xpixels uint32, ypixels uint32) (*Session, error) {
+	g, err := dhkx.GetGroup(0)
+	if err != nil {
+		return nil, err
+	}
+	priv, err := g.GeneratePrivateKey(nil)
+	if err != nil {
+		return nil, err
+	}
 	// TODO: In the future, the client will decide which user they will log in as
 	// For now, just assume that the user is the person running drshd
 	usr, err := user.Current()
@@ -46,8 +58,10 @@ func NewSession(rows uint32, cols uint32, xpixels uint32, ypixels uint32) (*Sess
 		return nil, err
 	}
 	return &Session{
-		Pty:       ptmx,
-		Timestamp: time.Now(),
+		Pty:        ptmx,
+		Timestamp:  time.Now(),
+		Group:      g,
+		PrivateKey: priv,
 	}, nil
 }
 

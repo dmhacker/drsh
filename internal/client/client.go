@@ -17,6 +17,7 @@ import (
 	"github.com/dmhacker/drsh/internal/proxy"
 	"github.com/dmhacker/drsh/internal/server"
 	"github.com/google/uuid"
+	"github.com/monnand/dhkx"
 	"go.uber.org/zap"
 	"golang.org/x/term"
 )
@@ -36,15 +37,26 @@ type Client struct {
 	Cnd              *sync.Cond
 	PingInfo         map[string]server.ServerProperties
 	PingLeft         int
+	HandshakeChan    chan bool
 	ConnectTimestamp time.Time
 	ConnectTo        string
-	HandshakeChan    chan bool
 	DoneChan         chan bool
+	Group            *dhkx.DHGroup
+	PrivateKey       *dhkx.DHKey
+	SharedKey        []byte
 }
 
 var ctx = context.Background()
 
 func NewClient(uri string, logger *zap.SugaredLogger) (*Client, error) {
+	g, err := dhkx.GetGroup(0)
+	if err != nil {
+		return nil, err
+	}
+	priv, err := g.GeneratePrivateKey(nil)
+	if err != nil {
+		return nil, err
+	}
 	name, err := uuid.NewRandom()
 	if err != nil {
 		return nil, err
@@ -56,6 +68,8 @@ func NewClient(uri string, logger *zap.SugaredLogger) (*Client, error) {
 		PingInfo:      make(map[string]server.ServerProperties),
 		HandshakeChan: make(chan bool),
 		DoneChan:      make(chan bool),
+		Group:         g,
+		PrivateKey:    priv,
 	}
 	clnt.Cnd = sync.NewCond(&clnt.Mtx)
 	prx, err := proxy.NewRedisProxy(base64.RawURLEncoding.EncodeToString(name[:]), "client", uri, logger, clnt.HandlePacket)
@@ -90,10 +104,16 @@ func (clnt *Client) HandlePing(sender string, properties server.ServerProperties
 	}
 }
 
-func (clnt *Client) HandleHandshake(sender string) {
+func (clnt *Client) HandleHandshake(sender string, key []byte) {
 	clnt.Mtx.Lock()
 	defer clnt.Mtx.Unlock()
 	if clnt.Stage == HandshakeStage && sender == clnt.ConnectTo {
+		pkey := dhkx.NewPublicKey(key)
+		skey, err := clnt.Group.ComputeKey(pkey, clnt.PrivateKey)
+		if err != nil {
+			clnt.Logger.Fatalf("Received invalid key from server: %s", err)
+		}
+		clnt.SharedKey = skey.Bytes()
 		clnt.HandshakeChan <- true
 	}
 }
@@ -139,7 +159,7 @@ func (clnt *Client) HandlePacket(pckt *packet.Packet) {
 			StartedAt: time.Now().Add(-1 * pckt.GetPingUptime().AsDuration()),
 		})
 	case packet.Packet_SERVER_HANDSHAKE:
-		clnt.HandleHandshake(sender)
+		clnt.HandleHandshake(sender, pckt.GetKey())
 	case packet.Packet_SERVER_OUTPUT:
 		clnt.HandleOutput(sender, pckt.GetPayload())
 	case packet.Packet_SERVER_EXIT:
@@ -218,6 +238,7 @@ func (clnt *Client) Connect(name string) {
 		PtyCols:    uint32(ws.Cols),
 		PtyXpixels: uint32(ws.X),
 		PtyYpixels: uint32(ws.Y),
+		Key:        clnt.PrivateKey.Bytes(),
 	}
 	clnt.Proxy.SendPacket("server", &handshake)
 	clnt.Mtx.Unlock()
