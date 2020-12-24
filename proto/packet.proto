@@ -26,8 +26,8 @@ message Packet {
 
   // Shared fields
   PacketType type = 1;
-  bytes sender = 2; // UUID of sending machine
-  bytes recipient = 3; // UUID of receiving machine
+  string sender = 2; // Unique name of sending machine
+  string recipient = 3; // Unique name of receiving machine
   
   // Client only fields
   bytes input_payload = 4;
@@ -37,7 +37,6 @@ message Packet {
   uint32 pty_ypixels = 8;
 
   // Server only fields
-  string ping_name = 9;
-  google.protobuf.Duration ping_uptime = 10;
-  bytes output_payload = 11;
+  google.protobuf.Duration ping_uptime = 9;
+  bytes output_payload = 10;
 }

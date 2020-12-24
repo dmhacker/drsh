@@ -9,7 +9,6 @@ import (
 	"github.com/dmhacker/drsh/internal/packet"
 	"github.com/dmhacker/drsh/internal/proxy"
 	"github.com/golang/protobuf/ptypes"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -24,11 +23,13 @@ var ctx = context.Background()
 
 func NewServer(name string, uri string, logger *zap.SugaredLogger) (*Server, error) {
 	serv := Server{
-		Properties: NewServerProperties(name),
-		Sessions:   sync.Map{},
-		Logger:     logger,
+		Properties: ServerProperties{
+			StartedAt: time.Now(),
+		},
+		Sessions: sync.Map{},
+		Logger:   logger,
 	}
-	prx, err := proxy.NewRedisProxy("server", uri, logger, serv.HandlePacket)
+	prx, err := proxy.NewRedisProxy(name, "server", uri, logger, serv.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +37,7 @@ func NewServer(name string, uri string, logger *zap.SugaredLogger) (*Server, err
 	return &serv, nil
 }
 
-func (serv *Server) GetSession(sender uuid.UUID) *Session {
+func (serv *Server) GetSession(sender string) *Session {
 	val, ok := serv.Sessions.Load(sender)
 	if ok {
 		return val.(*Session)
@@ -45,30 +46,29 @@ func (serv *Server) GetSession(sender uuid.UUID) *Session {
 	}
 }
 
-func (serv *Server) PutSession(sender uuid.UUID, session *Session) {
+func (serv *Server) PutSession(sender string, session *Session) {
 	serv.Sessions.Store(sender, session)
 }
 
-func (serv *Server) DeleteSession(sender uuid.UUID) {
+func (serv *Server) DeleteSession(sender string) {
 	serv.Sessions.Delete(sender)
 }
 
-func (serv *Server) HandlePing(sender uuid.UUID) {
+func (serv *Server) HandlePing(sender string) {
 	// Send an identical response packet back with public server information
 	resp := packet.Packet{
 		Type:       packet.Packet_SERVER_PING,
-		Sender:     serv.Proxy.Id[:],
-		Recipient:  sender[:],
-		PingName:   serv.Properties.Name,
+		Sender:     serv.Proxy.Name,
+		Recipient:  sender,
 		PingUptime: ptypes.DurationProto(serv.Properties.Uptime()),
 	}
 	serv.Proxy.SendPacket("client", &resp)
-	serv.Logger.Infof("Client %s has pinged.", sender.String())
+	serv.Logger.Infof("'%s' has pinged.", sender)
 }
 
-func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
+func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
 	if hasSession {
-		serv.Logger.Errorw("Client %s is already connected.", sender.String())
+		serv.Logger.Errorw("'%s' is already connected.", sender)
 		return
 	}
 	session, err := NewSession(rows, cols, xpixels, ypixels)
@@ -79,11 +79,11 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 	serv.PutSession(sender, session)
 	resp := packet.Packet{
 		Type:      packet.Packet_SERVER_HANDSHAKE,
-		Sender:    serv.Proxy.Id[:],
-		Recipient: sender[:],
+		Sender:    serv.Proxy.Name,
+		Recipient: sender,
 	}
 	serv.Proxy.SendPacket("client", &resp)
-	serv.Logger.Infof("Client %s has connected.", sender.String())
+	serv.Logger.Infof("'%s' has connected.", sender)
 	// Spawn goroutine to start capturing stdout from this session
 	go (func() {
 		for {
@@ -97,8 +97,8 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 				}
 				out := packet.Packet{
 					Type:          packet.Packet_SERVER_OUTPUT,
-					Sender:        serv.Proxy.Id[:],
-					Recipient:     sender[:],
+					Sender:        serv.Proxy.Name,
+					Recipient:     sender,
 					OutputPayload: buf[:cnt],
 				}
 				serv.Proxy.SendPacket("client", &out)
@@ -111,7 +111,7 @@ func (serv *Server) HandleHandshake(sender uuid.UUID, hasSession bool, rows uint
 	})()
 }
 
-func (serv *Server) HandleInput(sender uuid.UUID, payload []byte) {
+func (serv *Server) HandleInput(sender string, payload []byte) {
 	// Any input goes directly to the session; no response packet necessary
 	// If the input fails to be written to the session, terminate the client
 	session := serv.GetSession(sender)
@@ -123,7 +123,7 @@ func (serv *Server) HandleInput(sender uuid.UUID, payload []byte) {
 	}
 }
 
-func (serv *Server) HandlePty(sender uuid.UUID, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
+func (serv *Server) HandlePty(sender string, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
 	// Again, the resize event goes directly to the session
 	session := serv.GetSession(sender)
 	if session != nil {
@@ -131,7 +131,7 @@ func (serv *Server) HandlePty(sender uuid.UUID, rows uint32, cols uint32, xpixel
 	}
 }
 
-func (serv *Server) HandleExit(sender uuid.UUID, err error, ack bool) {
+func (serv *Server) HandleExit(sender string, err error, ack bool) {
 	// Clean up any session state between the server and the client
 	serv.DeleteSession(sender)
 	// Send an acknowledgement back to the client to indicate that we have
@@ -139,20 +139,20 @@ func (serv *Server) HandleExit(sender uuid.UUID, err error, ack bool) {
 	if ack {
 		resp := packet.Packet{
 			Type:      packet.Packet_SERVER_EXIT,
-			Sender:    serv.Proxy.Id[:],
-			Recipient: sender[:],
+			Sender:    serv.Proxy.Name,
+			Recipient: sender,
 		}
 		serv.Proxy.SendPacket("client", &resp)
 	}
 	if err != nil {
-		serv.Logger.Infof("Client %s has disconnected: %s.", sender.String(), err.Error())
+		serv.Logger.Infof("'%s' has disconnected: %s.", sender, err.Error())
 	} else {
-		serv.Logger.Infof("Client %s has disconnected.", sender.String())
+		serv.Logger.Infof("'%s' has disconnected.", sender)
 	}
 }
 
 func (serv *Server) HandlePacket(pckt *packet.Packet) {
-	sender, _ := uuid.FromBytes(pckt.GetSender())
+	sender := pckt.GetSender()
 	session := serv.GetSession(sender)
 	if session != nil {
 		session.RefreshExpiry()
@@ -169,7 +169,7 @@ func (serv *Server) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_CLIENT_EXIT:
 		serv.HandleExit(sender, nil, false)
 	default:
-		serv.Logger.Errorf("Received invalid packet from %s.", sender.String())
+		serv.Logger.Errorf("Received invalid packet from '%s'.", sender)
 	}
 }
 
@@ -177,10 +177,10 @@ func (serv *Server) StartTimeoutHandler() {
 	// Runs every 30 seconds and performs a sweep through the sessions to
 	// make sure none are expired (last packet received >10 minutes ago)
 	expiryCheck := func(k interface{}, v interface{}) bool {
-		sender, _ := k.(uuid.UUID)
+		sender, _ := k.(string)
 		session, _ := v.(*Session)
 		if session.IsExpired() {
-			serv.Logger.Infof("Client %s timed out.", sender.String())
+			serv.Logger.Infof("'%s' timed out.", sender)
 			serv.HandleExit(sender, fmt.Errorf("client timed out"), true)
 		}
 		return true

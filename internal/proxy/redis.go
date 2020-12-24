@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -9,7 +10,6 @@ import (
 	"github.com/dmhacker/drsh/internal/packet"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang/protobuf/proto"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -19,7 +19,7 @@ type CategoryPacket struct {
 }
 
 type RedisProxy struct {
-	Id        uuid.UUID
+	Name      string
 	Category  string
 	Rdb       *redis.Client
 	Incoming  chan *packet.Packet
@@ -33,17 +33,16 @@ type RedisProxy struct {
 
 var ctx = context.Background()
 
-func NewRedisProxy(category string, uri string, logger *zap.SugaredLogger, handler func(*packet.Packet)) (*RedisProxy, error) {
-	id, err := uuid.NewRandom()
-	if err != nil {
-		return nil, err
+func NewRedisProxy(name string, category string, uri string, logger *zap.SugaredLogger, handler func(*packet.Packet)) (*RedisProxy, error) {
+	if name == "" {
+		return nil, fmt.Errorf("Name cannot be empty")
 	}
 	opt, err := redis.ParseURL(uri)
 	if err != nil {
 		return nil, err
 	}
 	prx := RedisProxy{
-		Id:        id,
+		Name:      name,
 		Category:  category,
 		Rdb:       redis.NewClient(opt),
 		Incoming:  make(chan *packet.Packet),
@@ -58,20 +57,24 @@ func NewRedisProxy(category string, uri string, logger *zap.SugaredLogger, handl
 	if err != nil {
 		return nil, err
 	}
+	check, err := prx.Rdb.PubSubChannels(ctx, "drsh:"+prx.Category+":"+prx.Name).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(check) > 0 {
+		return nil, fmt.Errorf("Another server is already using that name.")
+	}
 	return &prx, nil
 }
 
-func (prx *RedisProxy) CandidateServers() []uuid.UUID {
+func (prx *RedisProxy) CandidateServers() []string {
 	channels, err := prx.Rdb.PubSubChannels(ctx, "drsh:server:*").Result()
 	if err != nil {
 		prx.Logger.Errorf("Could not obtain Redis channels: %s", err)
 	}
-	servers := make([]uuid.UUID, 0, len(channels))
+	servers := make([]string, 0, len(channels))
 	for _, channel := range channels {
-		server, err := uuid.Parse(strings.Split(channel, ":")[2])
-		if err != nil {
-			continue
-		}
+		server := strings.Join(strings.Split(channel, ":")[2:], ":")
 		servers = append(servers, server)
 	}
 	return servers
@@ -91,8 +94,8 @@ func (prx *RedisProxy) WaitUntilReady() {
 			}
 			pckt := packet.Packet{
 				Type:      packet.Packet_READY,
-				Sender:    prx.Id[:],
-				Recipient: prx.Id[:],
+				Sender:    prx.Name,
+				Recipient: prx.Name,
 			}
 			prx.SendPacket(prx.Category, &pckt)
 			time.Sleep(500 * time.Millisecond)
@@ -109,21 +112,13 @@ func (prx *RedisProxy) StartPacketHandler() {
 	// Any incoming packets over the channel have preliminary
 	// checks performed on them and then are handled by type
 	for pckt := range prx.Incoming {
-		recipient, err := uuid.FromBytes(pckt.GetRecipient())
-		if err != nil {
-			prx.Logger.Errorf("Could not interpret incoming recipient ID: %s", err)
-			continue
-		}
-		if recipient != prx.Id {
+		recipient := pckt.GetRecipient()
+		if recipient != prx.Name {
 			// Silently ignore any packets not intended for us
 			continue
 		}
-		sender, err := uuid.FromBytes(pckt.GetSender())
-		if err != nil {
-			prx.Logger.Errorf("Could not interpret incoming sender ID: %s", err)
-			continue
-		}
-		if pckt.GetType() == packet.Packet_READY && sender == prx.Id {
+		sender := pckt.GetSender()
+		if pckt.GetType() == packet.Packet_READY && sender == prx.Name {
 			prx.ReadyMtx.Lock()
 			prx.ReadyFlag = true
 			prx.ReadyCnd.Signal()
@@ -138,14 +133,9 @@ func (prx *RedisProxy) StartPacketSender() {
 	// Any outgoing packets are immediately serialized and then
 	// sent through Redis
 	for out := range prx.Outgoing {
-		recipient, err := uuid.FromBytes(out.Packet.GetRecipient())
-		if err != nil {
-			prx.Logger.Errorf("Could not interpret outgoing recipient ID: %s", err)
-			continue
-		}
 		channel := "drsh:"
 		channel += out.Category + ":"
-		channel += recipient.String()
+		channel += out.Packet.GetRecipient()
 		serial, err := proto.Marshal(out.Packet)
 		if err != nil {
 			prx.Logger.Errorf("Could not marshal packet: %s", err)
@@ -160,7 +150,7 @@ func (prx *RedisProxy) StartPacketSender() {
 }
 
 func (prx *RedisProxy) StartPacketReceiver() {
-	pubsub := prx.Rdb.Subscribe(ctx, "drsh:"+prx.Category+":"+prx.Id.String())
+	pubsub := prx.Rdb.Subscribe(ctx, "drsh:"+prx.Category+":"+prx.Name)
 	defer pubsub.Close()
 	for {
 		msg, err := pubsub.ReceiveMessage(ctx)
