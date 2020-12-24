@@ -34,6 +34,7 @@ type Client struct {
 	HandshakeChan    chan bool
 	ConnectTimestamp time.Time
 	ConnectId        uuid.UUID
+	OldTerminal      *term.State
 }
 
 var ctx = context.Background()
@@ -81,8 +82,19 @@ func (clnt *Client) HandleOutput(sender uuid.UUID, output []byte) {
 	if clnt.Stage == ConnectStage && sender == clnt.ConnectId {
 		cnt, err := os.Stdout.Write(output)
 		if err != nil || cnt != len(output) {
-			// TODO: Implement cleanup on exit
+			clnt.HandleExit(err, true)
 		}
+	}
+}
+
+func (clnt *Client) HandleExit(err error, ack bool) {
+	// TODO: Send ack to client if necessary
+	term.Restore(int(os.Stdin.Fd()), clnt.OldTerminal)
+	if err != nil {
+		fmt.Printf("An error occurred: %s\n", err)
+		os.Exit(1)
+	} else {
+		os.Exit(0)
 	}
 }
 
@@ -101,7 +113,7 @@ func (clnt *Client) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_SERVER_OUTPUT:
 		clnt.HandleOutput(sender, pckt.GetPayload())
 	case packet.Packet_SERVER_EXIT:
-		// TODO: Implement
+		clnt.HandleExit(nil, false)
 	default:
 		clnt.Logger.Errorf("Received invalid packet from %s.", sender.String())
 	}
@@ -193,27 +205,34 @@ func (clnt *Client) Connect(servId uuid.UUID) {
 	clnt.Stage = ConnectStage
 	clnt.Mtx.Unlock()
 	fmt.Println("Server has acknowledged connection.")
-	// TODO: Capture SIGWINCH os signals and send to server
-    go (func() {
-        oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-        if err != nil {
-            clnt.Logger.Fatalf("Could not put tty into raw mode: %s", err)
-        }
-        defer term.Restore(int(os.Stdin.Fd()), oldState)
-        for {
-            buf := make([]byte, 1024)
-            cnt, err := os.Stdin.Read(buf)
-            if err != nil {
-                // TODO: Implement cleanup on exit
-            }
-            in := packet.Packet{}
-            in.Type = packet.Packet_CLIENT_INPUT
-            in.Sender = clnt.Proxy.Id[:]
-            in.Recipient = clnt.ConnectId[:]
-            in.Payload = buf[:cnt]
-            clnt.Proxy.SendPacket(&in)
-        }
-    })()
+	// Capture SIGWINCH signals
+	go (func() {
+
+	})()
+	// Capture SIGWINCH signals
+	go (func() {
+
+	})()
+	// Capture input in packets and send to server
+	go (func() {
+        clnt.OldTerminal, err = term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			clnt.Logger.Fatalf("Could not put tty into raw mode: %s", err)
+		}
+		for {
+			buf := make([]byte, 1024)
+			cnt, err := os.Stdin.Read(buf)
+			if err != nil {
+				clnt.HandleExit(err, true)
+			}
+			in := packet.Packet{}
+			in.Type = packet.Packet_CLIENT_INPUT
+			in.Sender = clnt.Proxy.Id[:]
+			in.Recipient = clnt.ConnectId[:]
+			in.Payload = buf[:cnt]
+			clnt.Proxy.SendPacket(&in)
+		}
+	})()
 }
 
 func (clnt *Client) StartTimeoutHandler() {
@@ -237,7 +256,7 @@ func (clnt *Client) Start() {
 		return
 	}
 	clnt.Connect(*servId)
-    <-make(chan int)
+	<-make(chan int)
 }
 
 func (clnt *Client) Close() {
