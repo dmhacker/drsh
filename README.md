@@ -27,9 +27,9 @@ world setting:
 * drsh assumes that all clients & servers connecting to one Redis instance are
 mutually trusted. That is, one user won't attempt to interfere with traffic
 sent by another node.
-* drsh implements forward secrecy using the Diffie-Helman key exchange and
-encrypts messages using the ChaCha20-Poly1305 AEAD cipher. However, this
-former implementation has not be deemed cryptographically secure by experts.
+* drsh tries to implement forward secrecy using the Diffie-Helman key exchange
+and to encrypt messages using the ChaCha20-Poly1305 AEAD cipher. However, I cannot
+objectively guarantee that my implementation is cryptographically secure.
 * There are significant performance losses associated with routing packets
 through an intermediary rather than going with a direct route.
 
