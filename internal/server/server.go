@@ -208,7 +208,6 @@ func (serv *Server) StartTimeoutHandler() {
 		sender, _ := k.(string)
 		session, _ := v.(*Session)
 		if session.IsExpired() {
-			serv.Logger.Infof("'%s' timed out.", sender)
 			serv.HandleExit(sender, fmt.Errorf("client timed out"), true)
 		}
 		return true
