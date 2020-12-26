@@ -70,19 +70,6 @@ func NewRedisProxy(name string, category string, uri string, logger *zap.Sugared
 	return &prx, nil
 }
 
-func (prx *RedisProxy) ConnectedNodes(category string) []string {
-	channels, err := prx.Rdb.PubSubChannels(ctx, "drsh:"+category+":*").Result()
-	if err != nil {
-		prx.Logger.Errorf("Could not obtain Redis channels: %s", err)
-	}
-	servers := make([]string, 0, len(channels))
-	for _, channel := range channels {
-		server := strings.Join(strings.Split(channel, ":")[2:], ":")
-		servers = append(servers, server)
-	}
-	return servers
-}
-
 func (prx *RedisProxy) WaitUntilReady() {
 	// The ready check works by spawning a goroutine to send READY packets
 	// through Redis back to itself. As soon as one of these packets is

@@ -44,7 +44,7 @@ func main() {
 	if selection == nil {
 		components := strings.Split(command, "@")
 		if len(components) != 2 {
-			fmt.Println("Command should be in the format USER@HOST@URI.")
+			fmt.Println("Command should be either be an alias or in the format USER@HOST@URI.")
 			return
 		}
 		selection = &config.AliasEntry{
@@ -60,7 +60,7 @@ func main() {
 	sugar := logger.Sugar()
 
 	// Start the client
-	clnt, err := client.NewClient(selection.RedisUri, sugar)
+	clnt, err := client.NewClient(selection.User, selection.Hostname, selection.RedisUri, sugar)
 	if err != nil {
 		sugar.Error(err)
 		return

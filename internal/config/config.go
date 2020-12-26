@@ -13,7 +13,7 @@ type ServerConfig struct {
 }
 
 type AliasEntry struct {
-	Alias    string `mapstructure:"hostname"`
+	Alias    string `mapstructure:"alias"`
 	User     string `mapstructure:"user"`
 	Hostname string `mapstructure:"hostname"`
 	RedisUri string `mapstructure:"redis_uri"`

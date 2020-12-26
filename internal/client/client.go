@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -25,33 +24,24 @@ import (
 	"golang.org/x/term"
 )
 
-const (
-	PingStage = iota
-	SelectStage
-	HandshakeStage
-	ConnectStage
-)
-
 type Client struct {
-	Stage            int
-	Proxy            *proxy.RedisProxy
-	Logger           *zap.SugaredLogger
-	Mtx              sync.Mutex
-	Cnd              *sync.Cond
-	PingActive       []string
-	PingLeft         int
-	HandshakeChan    chan bool
-	ConnectTimestamp time.Time
-	ConnectTo        string
-	DoneChan         chan bool
-	Group            *dhkx.DHGroup
-	PrivateKey       *dhkx.DHKey
-	Cipher           cipher.AEAD
+	Proxy               *proxy.RedisProxy
+	Logger              *zap.SugaredLogger
+	Group               *dhkx.DHGroup
+	PrivateKey          *dhkx.DHKey
+	Cipher              cipher.AEAD
+	RemoteUser          string
+	RemoteHostname      string
+	LastPacketMutex     sync.Mutex
+	LastPacketTimestamp time.Time
+	ConnectedState      bool
+	Connected           chan bool
+	Finished            chan bool
 }
 
 var ctx = context.Background()
 
-func NewClient(uri string, logger *zap.SugaredLogger) (*Client, error) {
+func NewClient(user string, host string, uri string, logger *zap.SugaredLogger) (*Client, error) {
 	g, err := dhkx.GetGroup(0)
 	if err != nil {
 		return nil, err
@@ -65,21 +55,21 @@ func NewClient(uri string, logger *zap.SugaredLogger) (*Client, error) {
 		return nil, err
 	}
 	clnt := Client{
-		Stage:         PingStage,
-		Logger:        logger,
-		Mtx:           sync.Mutex{},
-		PingActive:    make([]string, 0),
-		HandshakeChan: make(chan bool),
-		DoneChan:      make(chan bool),
-		Group:         g,
-		PrivateKey:    priv,
+		Logger:              logger,
+		Group:               g,
+		PrivateKey:          priv,
+		RemoteUser:          user,
+		RemoteHostname:      host,
+		LastPacketMutex:     sync.Mutex{},
+		LastPacketTimestamp: time.Now(),
+		ConnectedState:      false,
+		Connected:           make(chan bool),
+		Finished:            make(chan bool),
 	}
-	clnt.Cnd = sync.NewCond(&clnt.Mtx)
-	prx, err := proxy.NewRedisProxy(base64.RawURLEncoding.EncodeToString(name[:]), "client", uri, logger, clnt.HandlePacket)
+	clnt.Proxy, err = proxy.NewRedisProxy(base64.RawURLEncoding.EncodeToString(name[:]), "client", uri, logger, clnt.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
-	clnt.Proxy = prx
 	return &clnt, nil
 }
 
@@ -95,22 +85,24 @@ func (clnt *Client) TerminalSize() *pty.Winsize {
 	return ws
 }
 
+func (clnt *Client) SaveHostTimestamp() {
+	clnt.LastPacketMutex.Lock()
+	defer clnt.LastPacketMutex.Unlock()
+	clnt.LastPacketTimestamp = time.Now()
+}
+
+func (clnt *Client) HostExpired() bool {
+	clnt.LastPacketMutex.Lock()
+	defer clnt.LastPacketMutex.Unlock()
+	return time.Now().Sub(clnt.LastPacketTimestamp).Minutes() >= 10
+}
+
 func (clnt *Client) HandlePing(sender string) {
-	clnt.Mtx.Lock()
-	defer clnt.Mtx.Unlock()
-	clnt.PingActive = append(clnt.PingActive, sender)
-	if clnt.Stage == PingStage {
-		clnt.PingLeft--
-		if clnt.PingLeft == 0 {
-			clnt.Cnd.Signal()
-		}
-	}
+	// Ignore ping responses from server for now
 }
 
 func (clnt *Client) HandleHandshake(sender string, key []byte) {
-	clnt.Mtx.Lock()
-	defer clnt.Mtx.Unlock()
-	if clnt.Stage == HandshakeStage && sender == clnt.ConnectTo {
+	if !clnt.ConnectedState && sender == clnt.RemoteHostname {
 		pkey := dhkx.NewPublicKey(key)
 		skey, err := clnt.Group.ComputeKey(pkey, clnt.PrivateKey)
 		if err != nil {
@@ -121,14 +113,13 @@ func (clnt *Client) HandleHandshake(sender string, key []byte) {
 		if err != nil {
 			clnt.Logger.Fatalf("Unable to create cipher: %s", err)
 		}
-		clnt.HandshakeChan <- true
+		clnt.ConnectedState = true
+		clnt.Connected <- true
 	}
 }
 
 func (clnt *Client) HandleOutput(sender string, payload []byte, nonce []byte) {
-	clnt.Mtx.Lock()
-	defer clnt.Mtx.Unlock()
-	if clnt.Stage == ConnectStage && sender == clnt.ConnectTo {
+	if clnt.ConnectedState && sender == clnt.RemoteHostname {
 		plaintext, err := clnt.Cipher.Open(nil, nonce, payload, nil)
 		if err != nil {
 			clnt.HandleExit(err, true)
@@ -145,7 +136,7 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 	if ack {
 		clnt.Proxy.SendPacket(proxy.DirectedPacket{
 			Category:  "server",
-			Recipient: clnt.ConnectTo,
+			Recipient: clnt.RemoteHostname,
 			Packet: &packet.Packet{
 				Type:   packet.Packet_CLIENT_EXIT,
 				Sender: clnt.Proxy.Name,
@@ -157,17 +148,15 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 	if err != nil {
 		fmt.Printf("An error occurred on exit: %s\n", err)
 	}
-	clnt.DoneChan <- true
+	clnt.Finished <- true
 }
 
 func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
 	pckt := dirpckt.Packet
 	sender := pckt.GetSender()
-	clnt.Mtx.Lock()
-	if clnt.Stage == ConnectStage && clnt.ConnectTo == sender {
-		clnt.ConnectTimestamp = time.Now()
+	if clnt.ConnectedState && clnt.RemoteHostname == sender {
+		clnt.SaveHostTimestamp()
 	}
-	clnt.Mtx.Unlock()
 	switch pckt.GetType() {
 	case packet.Packet_SERVER_PING:
 		clnt.HandlePing(sender)
@@ -182,69 +171,11 @@ func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
 	}
 }
 
-func (clnt *Client) PingAll() {
-	clnt.Mtx.Lock()
-	defer clnt.Mtx.Unlock()
-	clnt.Stage = PingStage
-	servers := clnt.Proxy.ConnectedNodes("server")
-	fmt.Printf("Pinging %d candidate servers. This will take a moment.\n", len(servers))
-	for _, server := range servers {
-		clnt.Proxy.SendPacket(proxy.DirectedPacket{
-			Category:  "server",
-			Recipient: server,
-			Packet: &packet.Packet{
-				Type:   packet.Packet_CLIENT_PING,
-				Sender: clnt.Proxy.Name,
-			},
-		})
-	}
-	clnt.PingLeft = len(servers)
-	if clnt.PingLeft > 0 {
-		// This goroutine times out the ping if a server takes too long to respond
-		go (func() {
-			time.Sleep(10 * time.Second)
-			clnt.Mtx.Lock()
-			clnt.Cnd.Signal()
-			clnt.Mtx.Unlock()
-		})()
-		clnt.Cnd.Wait()
-	}
-}
-
-func (clnt *Client) SelectServer() *string {
-	clnt.Mtx.Lock()
-	defer clnt.Mtx.Unlock()
-	if len(clnt.PingActive) == 0 {
-		fmt.Println("No available servers.")
-		return nil
-	}
-	clnt.Stage = SelectStage
-	fmt.Println("Available servers:")
-	for i, server := range clnt.PingActive {
-		fmt.Printf("%d) %s\n", i+1, server)
-	}
-	for {
-		fmt.Print("#? ")
-		var selection string
-		fmt.Scanln(&selection)
-		j, err := strconv.ParseInt(selection, 0, 64)
-		if err != nil || j < 1 || j > int64(len(clnt.PingActive)) {
-			fmt.Println("Invalid selection. Try again.")
-			continue
-		}
-		return &clnt.PingActive[j-1]
-	}
-}
-
-func (clnt *Client) Connect(name string) {
-	clnt.Mtx.Lock()
-	clnt.Stage = HandshakeStage
-	clnt.ConnectTo = name
-	clnt.Mtx.Unlock()
+func (clnt *Client) Connect() {
 	ws := clnt.TerminalSize()
 	clnt.Proxy.SendPacket(proxy.DirectedPacket{
 		Category:  "server",
-		Recipient: clnt.ConnectTo,
+		Recipient: clnt.RemoteHostname,
 		Packet: &packet.Packet{
 			Type:          packet.Packet_CLIENT_HANDSHAKE,
 			Sender:        clnt.Proxy.Name,
@@ -252,10 +183,7 @@ func (clnt *Client) Connect(name string) {
 			Key:           clnt.PrivateKey.Bytes(),
 		},
 	})
-	<-clnt.HandshakeChan
-	clnt.Mtx.Lock()
-	clnt.Stage = ConnectStage
-	clnt.Mtx.Unlock()
+	<-clnt.Connected
 	// Capture SIGWINCH signals
 	winchChan := make(chan os.Signal)
 	signal.Notify(winchChan, syscall.SIGWINCH)
@@ -264,7 +192,7 @@ func (clnt *Client) Connect(name string) {
 			ws := clnt.TerminalSize()
 			clnt.Proxy.SendPacket(proxy.DirectedPacket{
 				Category:  "server",
-				Recipient: clnt.ConnectTo,
+				Recipient: clnt.RemoteHostname,
 				Packet: &packet.Packet{
 					Type:          packet.Packet_CLIENT_PTY_WINCH,
 					Sender:        clnt.Proxy.Name,
@@ -291,7 +219,7 @@ func (clnt *Client) Connect(name string) {
 			ciphertext := clnt.Cipher.Seal(nil, nonce, buf[:cnt], nil)
 			clnt.Proxy.SendPacket(proxy.DirectedPacket{
 				Category:  "server",
-				Recipient: clnt.ConnectTo,
+				Recipient: clnt.RemoteHostname,
 				Packet: &packet.Packet{
 					Type:    packet.Packet_CLIENT_OUTPUT,
 					Sender:  clnt.Proxy.Name,
@@ -307,11 +235,7 @@ func (clnt *Client) StartTimeoutHandler() {
 	// Runs every 30 seconds and performs a check to make sure server
 	// has not timed out (last packet received >10 minutes ago)
 	for {
-		clnt.Mtx.Lock()
-		stage := clnt.Stage
-		timestamp := clnt.ConnectTimestamp
-		clnt.Mtx.Unlock()
-		if stage == ConnectStage && time.Now().Sub(timestamp).Minutes() >= 10 {
+		if clnt.HostExpired() {
 			clnt.HandleExit(fmt.Errorf("server timed out"), true)
 			break
 		}
@@ -323,23 +247,16 @@ func (clnt *Client) Start() {
 	// Connect to Redis and run background routines
 	go clnt.StartTimeoutHandler()
 	clnt.Proxy.Start()
-	// Send out pings to determine available servers
-	clnt.PingAll()
-	// Have the client select one of these servers
-	servId := clnt.SelectServer()
-	if servId == nil {
-		return
-	}
+	// Connect to the specified server
+	clnt.Connect()
 	// Put the current tty into raw mode and revert on exit
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		clnt.Logger.Fatalf("Could not put tty into raw mode: %s", err)
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
-	// Connect to the specified server
-	clnt.Connect(*servId)
-	// Wait until at least one thread messages the done channel
-	<-clnt.DoneChan
+	// Wait until at least one thread messages the finished channel
+	<-clnt.Finished
 }
 
 func (clnt *Client) Close() {
