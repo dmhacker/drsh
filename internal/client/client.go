@@ -14,7 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/creack/pty"
-	"github.com/dmhacker/drsh/internal/packet"
+	"github.com/dmhacker/drsh/internal/comms"
 	"github.com/dmhacker/drsh/internal/proxy"
 	"github.com/dmhacker/drsh/internal/util"
 	"github.com/google/uuid"
@@ -41,7 +41,7 @@ type Client struct {
 
 var ctx = context.Background()
 
-func NewClient(user string, host string, uri string, logger *zap.SugaredLogger) (*Client, error) {
+func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogger) (*Client, error) {
 	g, err := dhkx.GetGroup(0)
 	if err != nil {
 		return nil, err
@@ -59,14 +59,14 @@ func NewClient(user string, host string, uri string, logger *zap.SugaredLogger) 
 		Group:               g,
 		PrivateKey:          priv,
 		RemoteUser:          user,
-		RemoteHostname:      host,
+		RemoteHostname:      hostname,
 		LastPacketMutex:     sync.Mutex{},
 		LastPacketTimestamp: time.Now(),
 		ConnectedState:      false,
 		Connected:           make(chan bool),
 		Finished:            make(chan bool),
 	}
-	clnt.Proxy, err = proxy.NewRedisProxy(base64.RawURLEncoding.EncodeToString(name[:]), "client", uri, logger, clnt.HandlePacket)
+	clnt.Proxy, err = proxy.NewRedisProxy("client", base64.RawURLEncoding.EncodeToString(name[:]), uri, logger, clnt.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -101,17 +101,20 @@ func (clnt *Client) HandlePing(sender string) {
 	// Ignore ping responses from server for now
 }
 
-func (clnt *Client) HandleHandshake(sender string, key []byte) {
+func (clnt *Client) HandleHandshake(sender string, key []byte, success bool) {
+	if !success {
+		clnt.HandleExit(fmt.Errorf("server refused connection"), false)
+	}
 	if !clnt.ConnectedState && sender == clnt.RemoteHostname {
 		pkey := dhkx.NewPublicKey(key)
 		skey, err := clnt.Group.ComputeKey(pkey, clnt.PrivateKey)
 		if err != nil {
-			clnt.Logger.Fatalf("Received invalid key from server: %s", err)
+			clnt.HandleExit(err, false)
 		}
 		// TODO: Are there issues with only using the first 32 bytes?
 		clnt.Cipher, err = chacha20poly1305.New(skey.Bytes()[:chacha20poly1305.KeySize])
 		if err != nil {
-			clnt.Logger.Fatalf("Unable to create cipher: %s", err)
+			clnt.HandleExit(err, false)
 		}
 		clnt.ConnectedState = true
 		clnt.Connected <- true
@@ -133,22 +136,26 @@ func (clnt *Client) HandleOutput(sender string, payload []byte, nonce []byte) {
 }
 
 func (clnt *Client) HandleExit(err error, ack bool) {
+	if err != nil {
+		fmt.Println(err)
+	}
 	if ack {
 		clnt.Proxy.SendPacket(proxy.DirectedPacket{
 			Category:  "server",
 			Recipient: clnt.RemoteHostname,
-			Packet: &packet.Packet{
-				Type:   packet.Packet_CLIENT_EXIT,
-				Sender: clnt.Proxy.Name,
+			Packet: &comms.Packet{
+				Type:   comms.Packet_CLIENT_EXIT,
+				Sender: clnt.Proxy.Hostname,
 			},
 		})
 		// Add a slight delay so the disconnect packet can send
 		time.Sleep(100 * time.Millisecond)
 	}
-	if err != nil {
-		fmt.Printf("An error occurred on exit: %s\n", err)
+	if clnt.ConnectedState {
+		clnt.Finished <- true
+	} else {
+		os.Exit(1)
 	}
-	clnt.Finished <- true
 }
 
 func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
@@ -158,13 +165,13 @@ func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
 		clnt.SaveHostTimestamp()
 	}
 	switch pckt.GetType() {
-	case packet.Packet_SERVER_PING:
+	case comms.Packet_SERVER_PING:
 		clnt.HandlePing(sender)
-	case packet.Packet_SERVER_HANDSHAKE:
-		clnt.HandleHandshake(sender, pckt.GetKey())
-	case packet.Packet_SERVER_OUTPUT:
+	case comms.Packet_SERVER_HANDSHAKE:
+		clnt.HandleHandshake(sender, pckt.GetKey(), pckt.GetHandshakeSuccess())
+	case comms.Packet_SERVER_OUTPUT:
 		clnt.HandleOutput(sender, pckt.GetPayload(), pckt.GetNonce())
-	case packet.Packet_SERVER_EXIT:
+	case comms.Packet_SERVER_EXIT:
 		clnt.HandleExit(nil, false)
 	default:
 		clnt.Logger.Errorf("Received invalid packet from '%s'.", sender)
@@ -172,13 +179,16 @@ func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
 }
 
 func (clnt *Client) Connect() {
+	if !clnt.Proxy.IsListening("server", clnt.RemoteHostname) {
+		clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
+	}
 	ws := clnt.TerminalSize()
 	clnt.Proxy.SendPacket(proxy.DirectedPacket{
 		Category:  "server",
 		Recipient: clnt.RemoteHostname,
-		Packet: &packet.Packet{
-			Type:          packet.Packet_CLIENT_HANDSHAKE,
-			Sender:        clnt.Proxy.Name,
+		Packet: &comms.Packet{
+			Type:          comms.Packet_CLIENT_HANDSHAKE,
+			Sender:        clnt.Proxy.Hostname,
 			PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
 			Key:           clnt.PrivateKey.Bytes(),
 		},
@@ -193,9 +203,9 @@ func (clnt *Client) Connect() {
 			clnt.Proxy.SendPacket(proxy.DirectedPacket{
 				Category:  "server",
 				Recipient: clnt.RemoteHostname,
-				Packet: &packet.Packet{
-					Type:          packet.Packet_CLIENT_PTY_WINCH,
-					Sender:        clnt.Proxy.Name,
+				Packet: &comms.Packet{
+					Type:          comms.Packet_CLIENT_PTY_WINCH,
+					Sender:        clnt.Proxy.Hostname,
 					PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
 				},
 			})
@@ -220,9 +230,9 @@ func (clnt *Client) Connect() {
 			clnt.Proxy.SendPacket(proxy.DirectedPacket{
 				Category:  "server",
 				Recipient: clnt.RemoteHostname,
-				Packet: &packet.Packet{
-					Type:    packet.Packet_CLIENT_OUTPUT,
-					Sender:  clnt.Proxy.Name,
+				Packet: &comms.Packet{
+					Type:    comms.Packet_CLIENT_OUTPUT,
+					Sender:  clnt.Proxy.Hostname,
 					Payload: ciphertext,
 					Nonce:   nonce,
 				},
@@ -252,7 +262,7 @@ func (clnt *Client) Start() {
 	// Put the current tty into raw mode and revert on exit
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
-		clnt.Logger.Fatalf("Could not put tty into raw mode: %s", err)
+		clnt.HandleExit(err, false)
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
 	// Wait until at least one thread messages the finished channel

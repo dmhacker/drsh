@@ -1,7 +1,7 @@
 syntax = "proto3";
 package packet;
 
-option go_package = "./internal/packet";
+option go_package = "./internal/comms";
 
 message Packet {
   enum PacketType {
@@ -31,4 +31,7 @@ message Packet {
   
   // Client only fields
   uint64 pty_dimensions = 6;
+
+  // Server only fields
+  bool handshake_success = 7;
 }

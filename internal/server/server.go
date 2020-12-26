@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dmhacker/drsh/internal/packet"
+	"github.com/dmhacker/drsh/internal/comms"
 	"github.com/dmhacker/drsh/internal/proxy"
 	"github.com/dmhacker/drsh/internal/util"
 	"github.com/monnand/dhkx"
@@ -23,12 +23,12 @@ type Server struct {
 
 var ctx = context.Background()
 
-func NewServer(name string, uri string, logger *zap.SugaredLogger) (*Server, error) {
+func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server, error) {
 	serv := Server{
 		Sessions: sync.Map{},
 		Logger:   logger,
 	}
-	prx, err := proxy.NewRedisProxy(name, "server", uri, logger, serv.HandlePacket)
+	prx, err := proxy.NewRedisProxy("server", hostname, uri, logger, serv.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -58,44 +58,52 @@ func (serv *Server) HandlePing(sender string) {
 	serv.Proxy.SendPacket(proxy.DirectedPacket{
 		Category:  "client",
 		Recipient: sender,
-		Packet: &packet.Packet{
-			Type:   packet.Packet_SERVER_PING,
-			Sender: serv.Proxy.Name,
+		Packet: &comms.Packet{
+			Type:   comms.Packet_SERVER_PING,
+			Sender: serv.Proxy.Hostname,
 		},
 	})
 	serv.Logger.Infof("'%s' has pinged.", sender)
 }
 
-func (serv *Server) HandleHandshake(sender string, hasSession bool, key []byte) {
-	if hasSession {
+func (serv *Server) NewSessionFromHandshake(sender string, key []byte) *Session {
+	if serv.GetSession(sender) != nil {
 		serv.Logger.Errorw("'%s' is already connected.", sender)
-		return
+		return nil
 	}
 	session, err := NewSession()
 	if err != nil {
 		serv.Logger.Errorw("Could not allocate session: %s", err)
-		return
+		return nil
 	}
 	pkey := dhkx.NewPublicKey(key)
 	skey, err := session.Group.ComputeKey(pkey, session.PrivateKey)
 	if err != nil {
 		serv.Logger.Errorw("Received invalid key from client: %s", err)
-		return
+		return nil
 	}
 	// TODO: Are there issues with only using the first 32 bytes?
 	session.Cipher, err = chacha20poly1305.New(skey.Bytes()[:chacha20poly1305.KeySize])
 	if err != nil {
 		serv.Logger.Errorw("Unable to create cipher: %s", err)
-		return
+		return nil
 	}
-	serv.PutSession(sender, session)
+	return session
+}
+
+func (serv *Server) HandleHandshake(sender string, key []byte) {
+	session := serv.NewSessionFromHandshake(sender, key)
+	if session != nil {
+		serv.PutSession(sender, session)
+	}
 	serv.Proxy.SendPacket(proxy.DirectedPacket{
 		Category:  "client",
 		Recipient: sender,
-		Packet: &packet.Packet{
-			Type:   packet.Packet_SERVER_HANDSHAKE,
-			Sender: serv.Proxy.Name,
-			Key:    session.PrivateKey.Bytes(),
+		Packet: &comms.Packet{
+			Type:             comms.Packet_SERVER_HANDSHAKE,
+			Sender:           serv.Proxy.Hostname,
+			Key:              session.PrivateKey.Bytes(),
+			HandshakeSuccess: session != nil,
 		},
 	})
 	serv.Logger.Infof("'%s' has connected.", sender)
@@ -120,9 +128,9 @@ func (serv *Server) HandleHandshake(sender string, hasSession bool, key []byte) 
 				serv.Proxy.SendPacket(proxy.DirectedPacket{
 					Category:  "client",
 					Recipient: sender,
-					Packet: &packet.Packet{
-						Type:    packet.Packet_SERVER_OUTPUT,
-						Sender:  serv.Proxy.Name,
+					Packet: &comms.Packet{
+						Type:    comms.Packet_SERVER_OUTPUT,
+						Sender:  serv.Proxy.Hostname,
 						Payload: ciphertext,
 						Nonce:   nonce,
 					},
@@ -169,9 +177,9 @@ func (serv *Server) HandleExit(sender string, err error, ack bool) {
 		serv.Proxy.SendPacket(proxy.DirectedPacket{
 			Category:  "client",
 			Recipient: sender,
-			Packet: &packet.Packet{
-				Type:   packet.Packet_SERVER_EXIT,
-				Sender: serv.Proxy.Name,
+			Packet: &comms.Packet{
+				Type:   comms.Packet_SERVER_EXIT,
+				Sender: serv.Proxy.Hostname,
 			},
 		})
 	}
@@ -190,18 +198,18 @@ func (serv *Server) HandlePacket(dirpckt proxy.DirectedPacket) {
 		session.RefreshExpiry()
 	}
 	switch pckt.GetType() {
-	case packet.Packet_CLIENT_PING:
+	case comms.Packet_CLIENT_PING:
 		serv.HandlePing(sender)
-	case packet.Packet_CLIENT_HANDSHAKE:
-		serv.HandleHandshake(sender, session != nil, pckt.GetKey())
+	case comms.Packet_CLIENT_HANDSHAKE:
+		serv.HandleHandshake(sender, pckt.GetKey())
 		dims := util.Unpack64(pckt.GetPtyDimensions())
 		serv.HandlePty(sender, dims[0], dims[1], dims[2], dims[3])
-	case packet.Packet_CLIENT_OUTPUT:
+	case comms.Packet_CLIENT_OUTPUT:
 		serv.HandleOutput(sender, pckt.GetPayload(), pckt.GetNonce())
-	case packet.Packet_CLIENT_PTY_WINCH:
+	case comms.Packet_CLIENT_PTY_WINCH:
 		dims := util.Unpack64(pckt.GetPtyDimensions())
 		serv.HandlePty(sender, dims[0], dims[1], dims[2], dims[3])
-	case packet.Packet_CLIENT_EXIT:
+	case comms.Packet_CLIENT_EXIT:
 		serv.HandleExit(sender, nil, false)
 	default:
 		serv.Logger.Errorf("Received invalid packet from '%s'.", sender)

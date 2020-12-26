@@ -28,7 +28,7 @@ func main() {
 		sugar.Error(err)
 		return
 	}
-	sugar.Infof("Started server '%s'", serv.Proxy.Name)
+	sugar.Infof("Started server '%s'", serv.Proxy.Hostname)
 	defer serv.Close()
 	serv.Start()
 }

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dmhacker/drsh/internal/packet"
+	"github.com/dmhacker/drsh/internal/comms"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang/protobuf/proto"
 	"go.uber.org/zap"
@@ -16,11 +16,11 @@ import (
 type DirectedPacket struct {
 	Category  string
 	Recipient string
-	Packet    *packet.Packet
+	Packet    *comms.Packet
 }
 
 type RedisProxy struct {
-	Name      string
+	Hostname  string
 	Category  string
 	Rdb       *redis.Client
 	Rps       *redis.PubSub
@@ -35,16 +35,16 @@ type RedisProxy struct {
 
 var ctx = context.Background()
 
-func NewRedisProxy(name string, category string, uri string, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisProxy, error) {
-	if name == "" {
-		return nil, fmt.Errorf("Name cannot be empty")
+func NewRedisProxy(category string, hostname string, uri string, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisProxy, error) {
+	if hostname == "" {
+		return nil, fmt.Errorf("Hostname cannot be empty")
 	}
 	opt, err := redis.ParseURL(uri)
 	if err != nil {
 		return nil, err
 	}
 	prx := RedisProxy{
-		Name:      name,
+		Hostname:  hostname,
 		Category:  category,
 		Rdb:       redis.NewClient(opt),
 		Incoming:  make(chan DirectedPacket),
@@ -59,15 +59,16 @@ func NewRedisProxy(name string, category string, uri string, logger *zap.Sugared
 	if err != nil {
 		return nil, err
 	}
-	check, err := prx.Rdb.PubSubChannels(ctx, "drsh:"+prx.Category+":"+prx.Name).Result()
-	if err != nil {
-		return nil, err
+	if prx.IsListening(prx.Category, prx.Hostname) {
+		return nil, fmt.Errorf("another machine is already using that name")
 	}
-	if len(check) > 0 {
-		return nil, fmt.Errorf("Another server is already using that name.")
-	}
-	prx.Rps = prx.Rdb.Subscribe(ctx, "drsh:"+prx.Category+":"+prx.Name)
+	prx.Rps = prx.Rdb.Subscribe(ctx, "drsh:"+prx.Category+":"+prx.Hostname)
 	return &prx, nil
+}
+
+func (prx *RedisProxy) IsListening(category string, hostname string) bool {
+	channels, err := prx.Rdb.PubSubChannels(ctx, "drsh:"+category+":"+hostname).Result()
+	return err == nil && len(channels) > 0
 }
 
 func (prx *RedisProxy) WaitUntilReady() {
@@ -82,14 +83,13 @@ func (prx *RedisProxy) WaitUntilReady() {
 			if ready {
 				break
 			}
-			pckt := packet.Packet{
-				Type:   packet.Packet_READY,
-				Sender: prx.Name,
-			}
 			prx.SendPacket(DirectedPacket{
 				Category:  prx.Category,
-				Recipient: prx.Name,
-				Packet:    &pckt,
+				Recipient: prx.Hostname,
+				Packet: &comms.Packet{
+					Type:   comms.Packet_READY,
+					Sender: prx.Hostname,
+				},
 			})
 			time.Sleep(500 * time.Millisecond)
 		}
@@ -107,7 +107,7 @@ func (prx *RedisProxy) StartPacketHandler() {
 	for dp := range prx.Incoming {
 		pckt := dp.Packet
 		sender := pckt.GetSender()
-		if pckt.GetType() == packet.Packet_READY && sender == prx.Name {
+		if pckt.GetType() == comms.Packet_READY && sender == prx.Hostname {
 			prx.ReadyMtx.Lock()
 			prx.ReadyFlag = true
 			prx.ReadyCnd.Signal()
@@ -145,7 +145,7 @@ func (prx *RedisProxy) StartPacketReceiver() {
 			prx.Logger.Errorf("Unable to receive packet: %s", err)
 			continue
 		}
-		pckt := packet.Packet{}
+		pckt := comms.Packet{}
 		proto.Unmarshal([]byte(msg.Payload), &pckt)
 		components := strings.Split(msg.Channel, ":")
 		if len(components) != 2 && components[0] != "drsh" {
