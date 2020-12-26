@@ -3,8 +3,6 @@ package packet;
 
 option go_package = "./internal/packet";
 
-import "google/protobuf/duration.proto";
-
 message Packet {
   enum PacketType {
     // Packet sent on startup to self to make sure receiver is online
@@ -27,17 +25,10 @@ message Packet {
   // Shared fields
   PacketType type = 1;
   string sender = 2; // Unique name of sending machine
-  string recipient = 3; // Unique name of receiving machine
-  bytes payload = 4; // Used by OUTPUT messages
-  bytes nonce = 5; // Used by OUTPUT messages
-  bytes key = 6; // Used by HANDSHAKE messages
+  bytes payload = 3; // Used by OUTPUT messages
+  bytes nonce = 4; // Used by OUTPUT messages
+  bytes key = 5; // Used by HANDSHAKE messages
   
   // Client only fields
-  uint32 pty_rows = 7;
-  uint32 pty_cols = 8;
-  uint32 pty_xpixels = 9;
-  uint32 pty_ypixels = 10;
-
-  // Server only fields
-  google.protobuf.Duration ping_uptime = 11;
+  uint64 pty_dimensions = 6;
 }

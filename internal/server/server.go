@@ -9,26 +9,22 @@ import (
 
 	"github.com/dmhacker/drsh/internal/packet"
 	"github.com/dmhacker/drsh/internal/proxy"
-	"github.com/golang/protobuf/ptypes"
+	"github.com/dmhacker/drsh/internal/util"
 	"github.com/monnand/dhkx"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
 type Server struct {
-	Properties ServerProperties
-	Sessions   sync.Map
-	Proxy      *proxy.RedisProxy
-	Logger     *zap.SugaredLogger
+	Sessions sync.Map
+	Proxy    *proxy.RedisProxy
+	Logger   *zap.SugaredLogger
 }
 
 var ctx = context.Background()
 
 func NewServer(name string, uri string, logger *zap.SugaredLogger) (*Server, error) {
 	serv := Server{
-		Properties: ServerProperties{
-			StartedAt: time.Now(),
-		},
 		Sessions: sync.Map{},
 		Logger:   logger,
 	}
@@ -58,23 +54,24 @@ func (serv *Server) DeleteSession(sender string) {
 }
 
 func (serv *Server) HandlePing(sender string) {
-	// Send an identical response packet back with public server information
-	resp := packet.Packet{
-		Type:       packet.Packet_SERVER_PING,
-		Sender:     serv.Proxy.Name,
-		Recipient:  sender,
-		PingUptime: ptypes.DurationProto(serv.Properties.Uptime()),
-	}
-	serv.Proxy.SendPacket("client", &resp)
+	// Send an identical response packet back with public information
+	serv.Proxy.SendPacket(proxy.DirectedPacket{
+		Category:  "client",
+		Recipient: sender,
+		Packet: &packet.Packet{
+			Type:   packet.Packet_SERVER_PING,
+			Sender: serv.Proxy.Name,
+		},
+	})
 	serv.Logger.Infof("'%s' has pinged.", sender)
 }
 
-func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32, cols uint32, xpixels uint32, ypixels uint32, key []byte) {
+func (serv *Server) HandleHandshake(sender string, hasSession bool, key []byte) {
 	if hasSession {
 		serv.Logger.Errorw("'%s' is already connected.", sender)
 		return
 	}
-	session, err := NewSession(rows, cols, xpixels, ypixels)
+	session, err := NewSession()
 	if err != nil {
 		serv.Logger.Errorw("Could not allocate session: %s", err)
 		return
@@ -92,13 +89,15 @@ func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32,
 		return
 	}
 	serv.PutSession(sender, session)
-	resp := packet.Packet{
-		Type:      packet.Packet_SERVER_HANDSHAKE,
-		Sender:    serv.Proxy.Name,
+	serv.Proxy.SendPacket(proxy.DirectedPacket{
+		Category:  "client",
 		Recipient: sender,
-		Key:       session.PrivateKey.Bytes(),
-	}
-	serv.Proxy.SendPacket("client", &resp)
+		Packet: &packet.Packet{
+			Type:   packet.Packet_SERVER_HANDSHAKE,
+			Sender: serv.Proxy.Name,
+			Key:    session.PrivateKey.Bytes(),
+		},
+	})
 	serv.Logger.Infof("'%s' has connected.", sender)
 	// Spawn goroutine to start capturing stdout from this session
 	go (func() {
@@ -118,14 +117,16 @@ func (serv *Server) HandleHandshake(sender string, hasSession bool, rows uint32,
 					break
 				}
 				ciphertext := session.Cipher.Seal(nil, nonce, buf[:cnt], nil)
-				out := packet.Packet{
-					Type:      packet.Packet_SERVER_OUTPUT,
-					Sender:    serv.Proxy.Name,
+				serv.Proxy.SendPacket(proxy.DirectedPacket{
+					Category:  "client",
 					Recipient: sender,
-					Payload:   ciphertext,
-					Nonce:     nonce,
-				}
-				serv.Proxy.SendPacket("client", &out)
+					Packet: &packet.Packet{
+						Type:    packet.Packet_SERVER_OUTPUT,
+						Sender:  serv.Proxy.Name,
+						Payload: ciphertext,
+						Nonce:   nonce,
+					},
+				})
 			} else {
 				// If the session was already cleaned up, we
 				// can just end the goroutine gracefully
@@ -151,7 +152,7 @@ func (serv *Server) HandleOutput(sender string, payload []byte, nonce []byte) {
 	}
 }
 
-func (serv *Server) HandlePty(sender string, rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
+func (serv *Server) HandlePty(sender string, rows uint16, cols uint16, xpixels uint16, ypixels uint16) {
 	// Again, the resize event goes directly to the session
 	session := serv.GetSession(sender)
 	if session != nil {
@@ -165,12 +166,14 @@ func (serv *Server) HandleExit(sender string, err error, ack bool) {
 	// Send an acknowledgement back to the client to indicate that we have
 	// closed the session on the server's end
 	if ack {
-		resp := packet.Packet{
-			Type:      packet.Packet_SERVER_EXIT,
-			Sender:    serv.Proxy.Name,
+		serv.Proxy.SendPacket(proxy.DirectedPacket{
+			Category:  "client",
 			Recipient: sender,
-		}
-		serv.Proxy.SendPacket("client", &resp)
+			Packet: &packet.Packet{
+				Type:   packet.Packet_SERVER_EXIT,
+				Sender: serv.Proxy.Name,
+			},
+		})
 	}
 	if err != nil {
 		serv.Logger.Infof("'%s' has disconnected: %s.", sender, err.Error())
@@ -179,7 +182,8 @@ func (serv *Server) HandleExit(sender string, err error, ack bool) {
 	}
 }
 
-func (serv *Server) HandlePacket(pckt *packet.Packet) {
+func (serv *Server) HandlePacket(dirpckt proxy.DirectedPacket) {
+	pckt := dirpckt.Packet
 	sender := pckt.GetSender()
 	session := serv.GetSession(sender)
 	if session != nil {
@@ -189,11 +193,14 @@ func (serv *Server) HandlePacket(pckt *packet.Packet) {
 	case packet.Packet_CLIENT_PING:
 		serv.HandlePing(sender)
 	case packet.Packet_CLIENT_HANDSHAKE:
-		serv.HandleHandshake(sender, session != nil, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels(), pckt.GetKey())
+		serv.HandleHandshake(sender, session != nil, pckt.GetKey())
+		dims := util.Unpack64(pckt.GetPtyDimensions())
+		serv.HandlePty(sender, dims[0], dims[1], dims[2], dims[3])
 	case packet.Packet_CLIENT_OUTPUT:
 		serv.HandleOutput(sender, pckt.GetPayload(), pckt.GetNonce())
 	case packet.Packet_CLIENT_PTY_WINCH:
-		serv.HandlePty(sender, pckt.GetPtyRows(), pckt.GetPtyCols(), pckt.GetPtyXpixels(), pckt.GetPtyYpixels())
+		dims := util.Unpack64(pckt.GetPtyDimensions())
+		serv.HandlePty(sender, dims[0], dims[1], dims[2], dims[3])
 	case packet.Packet_CLIENT_EXIT:
 		serv.HandleExit(sender, nil, false)
 	default:

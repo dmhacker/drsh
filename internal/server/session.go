@@ -1,12 +1,12 @@
 package server
 
 import (
+	"crypto/cipher"
 	"os"
 	"os/exec"
 	"os/user"
 	"strconv"
 	"time"
-    "crypto/cipher"
 
 	"github.com/astromechza/etcpwdparse"
 	"github.com/creack/pty"
@@ -18,10 +18,10 @@ type Session struct {
 	Timestamp  time.Time
 	Group      *dhkx.DHGroup
 	PrivateKey *dhkx.DHKey
-    Cipher      cipher.AEAD
+	Cipher     cipher.AEAD
 }
 
-func NewSession(rows uint32, cols uint32, xpixels uint32, ypixels uint32) (*Session, error) {
+func NewSession() (*Session, error) {
 	g, err := dhkx.GetGroup(0)
 	if err != nil {
 		return nil, err
@@ -48,13 +48,7 @@ func NewSession(rows uint32, cols uint32, xpixels uint32, ypixels uint32) (*Sess
 	entry, _ := cache.LookupUserByUid(uid)
 	shell := entry.Shell()
 	cmd := exec.Command(shell)
-	sz := pty.Winsize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
-		X:    uint16(xpixels),
-		Y:    uint16(ypixels),
-	}
-	ptmx, err := pty.StartWithSize(cmd, &sz)
+	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		return nil, err
 	}
@@ -74,14 +68,13 @@ func (session *Session) IsExpired() bool {
 	return time.Now().Sub(session.Timestamp).Minutes() >= 10
 }
 
-func (session *Session) Resize(rows uint32, cols uint32, xpixels uint32, ypixels uint32) {
-	sz := pty.Winsize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
-		X:    uint16(xpixels),
-		Y:    uint16(ypixels),
-	}
-	pty.Setsize(session.Pty, &sz)
+func (session *Session) Resize(rows uint16, cols uint16, xpixels uint16, ypixels uint16) {
+	pty.Setsize(session.Pty, &pty.Winsize{
+		Rows: rows,
+		Cols: cols,
+		X:    xpixels,
+		Y:    ypixels,
+	})
 }
 
 func (session *Session) Send(payload []byte) (int, error) {

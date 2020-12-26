@@ -13,9 +13,10 @@ import (
 	"go.uber.org/zap"
 )
 
-type CategoryPacket struct {
-	Category string
-	Packet   *packet.Packet
+type DirectedPacket struct {
+	Category  string
+	Recipient string
+	Packet    *packet.Packet
 }
 
 type RedisProxy struct {
@@ -23,10 +24,10 @@ type RedisProxy struct {
 	Category  string
 	Rdb       *redis.Client
 	Rps       *redis.PubSub
-	Incoming  chan *packet.Packet
-	Outgoing  chan CategoryPacket
+	Incoming  chan DirectedPacket
+	Outgoing  chan DirectedPacket
 	Logger    *zap.SugaredLogger
-	Handler   func(*packet.Packet)
+	Handler   func(DirectedPacket)
 	ReadyMtx  sync.Mutex
 	ReadyFlag bool
 	ReadyCnd  *sync.Cond
@@ -34,7 +35,7 @@ type RedisProxy struct {
 
 var ctx = context.Background()
 
-func NewRedisProxy(name string, category string, uri string, logger *zap.SugaredLogger, handler func(*packet.Packet)) (*RedisProxy, error) {
+func NewRedisProxy(name string, category string, uri string, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisProxy, error) {
 	if name == "" {
 		return nil, fmt.Errorf("Name cannot be empty")
 	}
@@ -46,8 +47,8 @@ func NewRedisProxy(name string, category string, uri string, logger *zap.Sugared
 		Name:      name,
 		Category:  category,
 		Rdb:       redis.NewClient(opt),
-		Incoming:  make(chan *packet.Packet),
-		Outgoing:  make(chan CategoryPacket),
+		Incoming:  make(chan DirectedPacket),
+		Outgoing:  make(chan DirectedPacket),
 		Logger:    logger,
 		Handler:   handler,
 		ReadyMtx:  sync.Mutex{},
@@ -69,8 +70,8 @@ func NewRedisProxy(name string, category string, uri string, logger *zap.Sugared
 	return &prx, nil
 }
 
-func (prx *RedisProxy) CandidateServers() []string {
-	channels, err := prx.Rdb.PubSubChannels(ctx, "drsh:server:*").Result()
+func (prx *RedisProxy) ConnectedNodes(category string) []string {
+	channels, err := prx.Rdb.PubSubChannels(ctx, "drsh:"+category+":*").Result()
 	if err != nil {
 		prx.Logger.Errorf("Could not obtain Redis channels: %s", err)
 	}
@@ -95,11 +96,14 @@ func (prx *RedisProxy) WaitUntilReady() {
 				break
 			}
 			pckt := packet.Packet{
-				Type:      packet.Packet_READY,
-				Sender:    prx.Name,
-				Recipient: prx.Name,
+				Type:   packet.Packet_READY,
+				Sender: prx.Name,
 			}
-			prx.SendPacket(prx.Category, &pckt)
+			prx.SendPacket(DirectedPacket{
+				Category:  prx.Category,
+				Recipient: prx.Name,
+				Packet:    &pckt,
+			})
 			time.Sleep(500 * time.Millisecond)
 		}
 	})()
@@ -113,12 +117,8 @@ func (prx *RedisProxy) WaitUntilReady() {
 func (prx *RedisProxy) StartPacketHandler() {
 	// Any incoming packets over the channel have preliminary
 	// checks performed on them and then are handled by type
-	for pckt := range prx.Incoming {
-		recipient := pckt.GetRecipient()
-		if recipient != prx.Name {
-			// Silently ignore any packets not intended for us
-			continue
-		}
+	for dp := range prx.Incoming {
+		pckt := dp.Packet
 		sender := pckt.GetSender()
 		if pckt.GetType() == packet.Packet_READY && sender == prx.Name {
 			prx.ReadyMtx.Lock()
@@ -127,7 +127,7 @@ func (prx *RedisProxy) StartPacketHandler() {
 			prx.ReadyMtx.Unlock()
 			continue
 		}
-		prx.Handler(pckt)
+		prx.Handler(dp)
 	}
 }
 
@@ -137,7 +137,7 @@ func (prx *RedisProxy) StartPacketSender() {
 	for out := range prx.Outgoing {
 		channel := "drsh:"
 		channel += out.Category + ":"
-		channel += out.Packet.GetRecipient()
+		channel += out.Recipient
 		serial, err := proto.Marshal(out.Packet)
 		if err != nil {
 			prx.Logger.Errorf("Could not marshal packet: %s", err)
@@ -160,15 +160,21 @@ func (prx *RedisProxy) StartPacketReceiver() {
 		}
 		pckt := packet.Packet{}
 		proto.Unmarshal([]byte(msg.Payload), &pckt)
-		prx.Incoming <- &pckt
+		components := strings.Split(msg.Channel, ":")
+		if len(components) != 2 && components[0] != "drsh" {
+			prx.Logger.Errorf("Packet's channel is invalid: %s", msg.Channel)
+			continue
+		}
+		prx.Incoming <- DirectedPacket{
+			Category:  components[1],
+			Recipient: components[2],
+			Packet:    &pckt,
+		}
 	}
 }
 
-func (prx *RedisProxy) SendPacket(category string, pckt *packet.Packet) {
-	prx.Outgoing <- CategoryPacket{
-		Category: category,
-		Packet:   pckt,
-	}
+func (prx *RedisProxy) SendPacket(dirpckt DirectedPacket) {
+	prx.Outgoing <- dirpckt
 }
 
 func (prx *RedisProxy) Start() {
