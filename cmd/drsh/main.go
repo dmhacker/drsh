@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/dmhacker/drsh/internal/client"
-	"github.com/spf13/viper"
+	"github.com/dmhacker/drsh/internal/config"
 	"go.uber.org/zap"
 )
 
@@ -15,24 +15,43 @@ type ClientConfiguration struct {
 }
 
 func main() {
-	// Read in config file and fetch variables
 	if len(os.Args) == 1 {
-		fmt.Printf("Usage: %s [CONFIG]\n", os.Args[0])
+		fmt.Printf("Usage: %s [ALIAS|USER@HOST@URI]\n", os.Args[0])
 		return
 	}
-	filename := strings.Join(os.Args[1:], " ")
-	viper.SetConfigName(filename)
-	viper.AddConfigPath(".")
-	viper.AutomaticEnv()
-	viper.SetConfigType("yml")
-	config := ClientConfiguration{}
-	if err := viper.ReadInConfig(); err != nil {
+
+	// Read in config file and fetch aliases
+	filename, err := config.DefaultClientConfig()
+	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	if err := viper.Unmarshal(&config); err != nil {
+	cfg := config.ClientConfig{}
+	if err := config.ReadConfig(filename, &cfg); err != nil {
 		fmt.Println(err)
 		return
+	}
+
+	// Try to resolve alias
+	command := os.Args[1]
+	var selection *config.AliasEntry = nil
+	for _, entry := range cfg.Aliases {
+		if command == entry.Alias {
+			selection = &entry
+		}
+	}
+	// If command matches no alias, then interpret it using alias format
+	if selection == nil {
+		components := strings.Split(command, "@")
+		if len(components) != 2 {
+			fmt.Println("Command should be in the format USER@HOST@URI.")
+			return
+		}
+		selection = &config.AliasEntry{
+			User:     components[0],
+			Hostname: components[1],
+			RedisUri: components[2],
+		}
 	}
 
 	// Start the logger
@@ -41,7 +60,7 @@ func main() {
 	sugar := logger.Sugar()
 
 	// Start the client
-	clnt, err := client.NewClient(config.RedisUri, sugar)
+	clnt, err := client.NewClient(selection.RedisUri, sugar)
 	if err != nil {
 		sugar.Error(err)
 		return
