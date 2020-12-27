@@ -60,7 +60,7 @@ func NewRedisProxy(category string, hostname string, uri string, logger *zap.Sug
 		return nil, err
 	}
 	if prx.IsListening(prx.Category, prx.Hostname) {
-		return nil, fmt.Errorf("another machine is already using that name")
+		return nil, fmt.Errorf("hostname is in use already on this network")
 	}
 	prx.Rps = prx.Rdb.Subscribe(ctx, "drsh:"+prx.Category+":"+prx.Hostname)
 	return &prx, nil

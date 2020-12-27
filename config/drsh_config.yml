@@ -1,5 +1,0 @@
-aliases:
-  - alias: "default"
-    user: "root"
-    hostname: "default-host"
-    redis_uri: "redis://localhost:6379"

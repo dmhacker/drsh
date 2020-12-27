@@ -7,11 +7,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-type ServerConfig struct {
-	Hostname string `mapstructure:"hostname"`
-	RedisUri string `mapstructure:"redis_uri"`
-}
-
 type AliasEntry struct {
 	Alias    string `mapstructure:"alias"`
 	User     string `mapstructure:"user"`
@@ -19,8 +14,14 @@ type AliasEntry struct {
 	RedisUri string `mapstructure:"redis_uri"`
 }
 
-type ClientConfig struct {
-	Aliases []AliasEntry `mapstructure:"aliases"`
+type Config struct {
+	Server struct {
+		Hostname string `mapstructure:"hostname"`
+		RedisUri string `mapstructure:"redis_uri"`
+	} `mapstructure:"server"`
+	Client struct {
+		Aliases []AliasEntry `mapstructure:"aliases"`
+	} `mapstructure:"client"`
 }
 
 func ConfigHome() (string, error) {
@@ -35,15 +36,7 @@ func ConfigHome() (string, error) {
 	return configHome, nil
 }
 
-func DefaultServerConfig() (string, error) {
-	configHome, err := ConfigHome()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(configHome, "drshd", "config.yml"), nil
-}
-
-func DefaultClientConfig() (string, error) {
+func DefaultConfigFilename() (string, error) {
 	configHome, err := ConfigHome()
 	if err != nil {
 		return "", err
@@ -51,13 +44,13 @@ func DefaultClientConfig() (string, error) {
 	return filepath.Join(configHome, "drsh", "config.yml"), nil
 }
 
-func ReadConfig(filename string, rawVal interface{}) error {
+func ReadConfig(filename string, cfg *Config) error {
 	viper.SetConfigFile(filename)
 	viper.AutomaticEnv()
 	if err := viper.ReadInConfig(); err != nil {
 		return err
 	}
-	if err := viper.Unmarshal(rawVal); err != nil {
+	if err := viper.Unmarshal(cfg); err != nil {
 		return err
 	}
 	return nil

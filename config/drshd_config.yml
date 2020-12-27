@@ -1,2 +1,0 @@
-hostname: "default-host"
-redis_uri: "redis://localhost:6379"
