@@ -58,7 +58,7 @@ func (serv *Server) HandlePing(sender string) {
 	serv.Proxy.SendPacket(proxy.DirectedPacket{
 		Category:  "client",
 		Recipient: sender,
-		Packet: &comms.Packet{
+		Packet: comms.Packet{
 			Type:   comms.Packet_SERVER_PING,
 			Sender: serv.Proxy.Hostname,
 		},
@@ -99,7 +99,7 @@ func (serv *Server) HandleHandshake(sender string, key []byte) {
 	serv.Proxy.SendPacket(proxy.DirectedPacket{
 		Category:  "client",
 		Recipient: sender,
-		Packet: &comms.Packet{
+		Packet: comms.Packet{
 			Type:             comms.Packet_SERVER_HANDSHAKE,
 			Sender:           serv.Proxy.Hostname,
 			Key:              session.PrivateKey.Bytes(),
@@ -128,7 +128,7 @@ func (serv *Server) HandleHandshake(sender string, key []byte) {
 				serv.Proxy.SendPacket(proxy.DirectedPacket{
 					Category:  "client",
 					Recipient: sender,
-					Packet: &comms.Packet{
+					Packet: comms.Packet{
 						Type:    comms.Packet_SERVER_OUTPUT,
 						Sender:  serv.Proxy.Hostname,
 						Payload: ciphertext,
@@ -177,7 +177,7 @@ func (serv *Server) HandleExit(sender string, err error, ack bool) {
 		serv.Proxy.SendPacket(proxy.DirectedPacket{
 			Category:  "client",
 			Recipient: sender,
-			Packet: &comms.Packet{
+			Packet: comms.Packet{
 				Type:   comms.Packet_SERVER_EXIT,
 				Sender: serv.Proxy.Hostname,
 			},

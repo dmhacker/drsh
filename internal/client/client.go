@@ -143,7 +143,7 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 		clnt.Proxy.SendPacket(proxy.DirectedPacket{
 			Category:  "server",
 			Recipient: clnt.RemoteHostname,
-			Packet: &comms.Packet{
+			Packet: comms.Packet{
 				Type:   comms.Packet_CLIENT_EXIT,
 				Sender: clnt.Proxy.Hostname,
 			},
@@ -186,7 +186,7 @@ func (clnt *Client) Connect() {
 	clnt.Proxy.SendPacket(proxy.DirectedPacket{
 		Category:  "server",
 		Recipient: clnt.RemoteHostname,
-		Packet: &comms.Packet{
+		Packet: comms.Packet{
 			Type:          comms.Packet_CLIENT_HANDSHAKE,
 			Sender:        clnt.Proxy.Hostname,
 			PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
@@ -203,7 +203,7 @@ func (clnt *Client) Connect() {
 			clnt.Proxy.SendPacket(proxy.DirectedPacket{
 				Category:  "server",
 				Recipient: clnt.RemoteHostname,
-				Packet: &comms.Packet{
+				Packet: comms.Packet{
 					Type:          comms.Packet_CLIENT_PTY_WINCH,
 					Sender:        clnt.Proxy.Hostname,
 					PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
@@ -230,7 +230,7 @@ func (clnt *Client) Connect() {
 			clnt.Proxy.SendPacket(proxy.DirectedPacket{
 				Category:  "server",
 				Recipient: clnt.RemoteHostname,
-				Packet: &comms.Packet{
+				Packet: comms.Packet{
 					Type:    comms.Packet_CLIENT_OUTPUT,
 					Sender:  clnt.Proxy.Hostname,
 					Payload: ciphertext,

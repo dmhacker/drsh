@@ -16,7 +16,7 @@ import (
 type DirectedPacket struct {
 	Category  string
 	Recipient string
-	Packet    *comms.Packet
+	Packet    comms.Packet
 }
 
 type RedisProxy struct {
@@ -86,7 +86,7 @@ func (prx *RedisProxy) WaitUntilReady() {
 			prx.SendPacket(DirectedPacket{
 				Category:  prx.Category,
 				Recipient: prx.Hostname,
-				Packet: &comms.Packet{
+				Packet: comms.Packet{
 					Type:   comms.Packet_READY,
 					Sender: prx.Hostname,
 				},
@@ -104,8 +104,8 @@ func (prx *RedisProxy) WaitUntilReady() {
 func (prx *RedisProxy) StartPacketHandler() {
 	// Any incoming packets over the channel have preliminary
 	// checks performed on them and then are handled by type
-	for dp := range prx.Incoming {
-		pckt := dp.Packet
+	for dirpckt := range prx.Incoming {
+		pckt := dirpckt.Packet
 		sender := pckt.GetSender()
 		if pckt.GetType() == comms.Packet_READY && sender == prx.Hostname {
 			prx.ReadyMtx.Lock()
@@ -114,18 +114,18 @@ func (prx *RedisProxy) StartPacketHandler() {
 			prx.ReadyMtx.Unlock()
 			continue
 		}
-		prx.Handler(dp)
+		prx.Handler(dirpckt)
 	}
 }
 
 func (prx *RedisProxy) StartPacketSender() {
 	// Any outgoing packets are immediately serialized and then
 	// sent through Redis
-	for out := range prx.Outgoing {
+	for dirpckt := range prx.Outgoing {
 		channel := "drsh:"
-		channel += out.Category + ":"
-		channel += out.Recipient
-		serial, err := proto.Marshal(out.Packet)
+		channel += dirpckt.Category + ":"
+		channel += dirpckt.Recipient
+		serial, err := proto.Marshal(&dirpckt.Packet)
 		if err != nil {
 			prx.Logger.Errorf("Could not marshal packet: %s", err)
 			continue
@@ -145,18 +145,18 @@ func (prx *RedisProxy) StartPacketReceiver() {
 			prx.Logger.Errorf("Unable to receive packet: %s", err)
 			continue
 		}
-		pckt := comms.Packet{}
-		proto.Unmarshal([]byte(msg.Payload), &pckt)
 		components := strings.Split(msg.Channel, ":")
 		if len(components) != 2 && components[0] != "drsh" {
 			prx.Logger.Errorf("Packet's channel is invalid: %s", msg.Channel)
 			continue
 		}
-		prx.Incoming <- DirectedPacket{
+		dirpckt := DirectedPacket{
 			Category:  components[1],
 			Recipient: components[2],
-			Packet:    &pckt,
+			Packet:    comms.Packet{},
 		}
+		proto.Unmarshal([]byte(msg.Payload), &dirpckt.Packet)
+		prx.Incoming <- dirpckt
 	}
 }
 
