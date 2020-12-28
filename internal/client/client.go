@@ -71,8 +71,8 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 		LastPacketMutex:     sync.Mutex{},
 		LastPacketTimestamp: time.Now(),
 		ConnectedState:      false,
-		Connected:           make(chan bool),
-		Finished:            make(chan bool),
+		Connected:           make(chan bool, 1),
+		Finished:            make(chan bool, 1),
 		Pinged:              make(chan PingResponse, 1),
 	}
 	clnt.Proxy, err = proxy.NewRedisProxy("client", base64.RawURLEncoding.EncodeToString(name[:]), uri, logger, clnt.HandlePacket)
