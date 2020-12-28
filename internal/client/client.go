@@ -43,7 +43,7 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 	clnt := Client{
 		Logger:              logger,
 		RemoteUser:          user,
-		RemoteHostname:      "s-" + hostname,
+		RemoteHostname:      "se-" + hostname,
 		LastPacketMutex:     sync.Mutex{},
 		LastPacketTimestamp: time.Now(),
 		ConnectedState:      false,
@@ -55,7 +55,7 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 	if err != nil {
 		return nil, err
 	}
-	clnt.Host, err = host.NewRedisHost("c-"+name, uri, logger, clnt.HandlePacket)
+	clnt.Host, err = host.NewRedisHost("cl-"+name, uri, logger, clnt.HandlePacket)
 	if err != nil {
 		return nil, err
 	}

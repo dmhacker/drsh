@@ -248,8 +248,10 @@ func (host *RedisHost) StartPacketSender() {
 			// If the host is closed, this is likely a normal shutdown event
 			if host.IsOpen() {
 				host.Logger.Errorf("Failed to publish packet: %s", err)
+				continue
+			} else {
+				break
 			}
-			break
 		}
 	}
 }
@@ -261,8 +263,10 @@ func (host *RedisHost) StartPacketReceiver() {
 			// If the host is closed, this is likely a normal shutdown event
 			if host.IsOpen() {
 				host.Logger.Errorf("Failed to receive packet: %s", err)
+				continue
+			} else {
+				break
 			}
-			break
 		}
 		raw := []byte(msg.Payload)
 		if host.IsEncryptionEnabled() {

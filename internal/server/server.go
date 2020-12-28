@@ -19,7 +19,7 @@ func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server,
 	serv := Server{
 		Logger: logger,
 	}
-	hst, err := host.NewRedisHost("s-"+hostname, uri, logger, serv.HandlePacket)
+	hst, err := host.NewRedisHost("se-"+hostname, uri, logger, serv.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
