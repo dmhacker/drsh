@@ -28,7 +28,7 @@ import (
 type PingResponse struct {
 	Sender   string
 	Size     int
-	Received time.Time
+	RecvTime time.Time
 }
 
 type Client struct {
@@ -110,7 +110,7 @@ func (clnt *Client) HandlePing(sender string, size int) {
 	clnt.Pinged <- PingResponse{
 		Sender:   sender,
 		Size:     size,
-		Received: time.Now(),
+		RecvTime: time.Now(),
 	}
 }
 
@@ -263,18 +263,40 @@ func (clnt *Client) Connect() {
 }
 
 func (clnt *Client) Ping() {
+	if !clnt.Proxy.IsListening("server", clnt.RemoteHostname) {
+		clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
+	}
+	start := time.Now()
 	pckt := comms.Packet{
 		Type:   comms.Packet_CLIENT_PING,
 		Sender: clnt.Proxy.Hostname,
 	}
+	intr := make(chan os.Signal, 1)
+	signal.Notify(intr, os.Interrupt)
+	sentCnt := 0
+	recvCnt := 0
+	minDuration := time.Now().Sub(time.Now())
+	maxDuration := minDuration
+	first := true
+	go func() {
+		for range intr {
+			loss := (sentCnt - recvCnt) * 100 / sentCnt
+			totalDuration := time.Now().Sub(start)
+			fmt.Printf("\n--- %s ping statistics ---\n", clnt.RemoteHostname)
+			fmt.Printf("%d packets transmitted, %d received, %d%% packet loss, time %s\n", sentCnt, recvCnt, loss, totalDuration)
+			fmt.Printf("rtt min/max %s/%s\n", minDuration, maxDuration)
+			os.Exit(0)
+		}
+	}()
 	fmt.Printf("PING %s %d data bytes\n", clnt.RemoteHostname, proto.Size(&pckt))
 	for {
-		sent := time.Now()
+		sentTime := time.Now()
 		clnt.Proxy.SendPacket(proxy.DirectedPacket{
 			Category:  "server",
 			Recipient: clnt.RemoteHostname,
 			Packet:    pckt,
 		})
+		sentCnt++
 		var resp PingResponse
 		for {
 			resp = <-clnt.Pinged
@@ -282,7 +304,16 @@ func (clnt *Client) Ping() {
 				break
 			}
 		}
-		fmt.Printf("%d bytes from %s: time=%s\n", resp.Size, clnt.RemoteHostname, resp.Received.Sub(sent))
+		recvCnt++
+		recvDuration := resp.RecvTime.Sub(sentTime)
+		if recvDuration < minDuration || first {
+			minDuration = recvDuration
+		}
+		if recvDuration > maxDuration || first {
+			maxDuration = recvDuration
+		}
+		first = false
+		fmt.Printf("%d bytes from %s: time=%s\n", resp.Size, clnt.RemoteHostname, recvDuration)
 		time.Sleep(1 * time.Second)
 	}
 }
