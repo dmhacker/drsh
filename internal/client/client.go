@@ -2,8 +2,6 @@ package client
 
 import (
 	"context"
-	"crypto/cipher"
-	"crypto/rand"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,12 +10,10 @@ import (
 	"time"
 
 	"github.com/dmhacker/drsh/internal/comms"
-	"github.com/dmhacker/drsh/internal/proxy"
+	"github.com/dmhacker/drsh/internal/host"
 	"github.com/dmhacker/drsh/internal/util"
 	"github.com/golang/protobuf/proto"
-	"github.com/monnand/dhkx"
 	"go.uber.org/zap"
-	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/term"
 )
 
@@ -28,11 +24,8 @@ type PingResponse struct {
 }
 
 type Client struct {
-	Proxy               *proxy.RedisProxy
+	Host                *host.RedisHost
 	Logger              *zap.SugaredLogger
-	Group               *dhkx.DHGroup
-	PrivateKey          *dhkx.DHKey
-	Cipher              cipher.AEAD
 	RemoteUser          string
 	RemoteHostname      string
 	LastPacketMutex     sync.Mutex
@@ -47,18 +40,8 @@ type Client struct {
 var ctx = context.Background()
 
 func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogger) (*Client, error) {
-	g, err := dhkx.GetGroup(0)
-	if err != nil {
-		return nil, err
-	}
-	priv, err := g.GeneratePrivateKey(nil)
-	if err != nil {
-		return nil, err
-	}
 	clnt := Client{
 		Logger:              logger,
-		Group:               g,
-		PrivateKey:          priv,
 		RemoteUser:          user,
 		RemoteHostname:      hostname,
 		LastPacketMutex:     sync.Mutex{},
@@ -72,7 +55,7 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 	if err != nil {
 		return nil, err
 	}
-	clnt.Proxy, err = proxy.NewRedisProxy("client", name, uri, logger, clnt.HandlePacket)
+	clnt.Host, err = host.NewRedisHost("client", name, uri, logger, clnt.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -102,32 +85,25 @@ func (clnt *Client) HandlePing(sender string, size int) {
 func (clnt *Client) HandleHandshake(sender string, success bool, key []byte, session string) {
 	if !success {
 		clnt.HandleExit(fmt.Errorf("server refused connection"), false)
+		return
 	}
 	if !clnt.ConnectedState && sender == clnt.RemoteHostname {
-		pub := dhkx.NewPublicKey(key)
-		skey, err := clnt.Group.ComputeKey(pub, clnt.PrivateKey)
+		err := clnt.Host.CompleteKeyExchange(key)
 		if err != nil {
 			clnt.HandleExit(err, false)
+			return
 		}
-		// TODO: Are there issues with only using the first 32 bytes?
-		clnt.Cipher, err = chacha20poly1305.New(skey.Bytes()[:chacha20poly1305.KeySize])
-		if err != nil {
-			clnt.HandleExit(err, false)
-		}
+		clnt.Host.FreePrivateKeys()
+		clnt.Host.SetEncryptionEnabled(true)
 		clnt.ConnectedSession = session
 		clnt.ConnectedState = true
 		clnt.Connected <- true
 	}
 }
 
-func (clnt *Client) HandleOutput(sender string, payload []byte, nonce []byte) {
+func (clnt *Client) HandleOutput(sender string, payload []byte) {
 	if clnt.ConnectedState && sender == clnt.ConnectedSession {
-		plaintext, err := clnt.Cipher.Open(nil, nonce, payload, nil)
-		if err != nil {
-			clnt.HandleExit(err, true)
-			return
-		}
-		_, err = os.Stdout.Write(plaintext)
+		_, err := os.Stdout.Write(payload)
 		if err != nil {
 			clnt.HandleExit(err, true)
 		}
@@ -139,12 +115,12 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	if ack {
-		clnt.Proxy.SendPacket(proxy.DirectedPacket{
+		clnt.Host.SendPacket(host.DirectedPacket{
 			Category:  "server",
 			Recipient: clnt.RemoteHostname,
 			Packet: comms.Packet{
 				Type:   comms.Packet_CLIENT_EXIT,
-				Sender: clnt.Proxy.Hostname,
+				Sender: clnt.Host.Hostname,
 			},
 		})
 		// Add a slight delay so the disconnect packet can send
@@ -157,7 +133,7 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 	}
 }
 
-func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
+func (clnt *Client) HandlePacket(dirpckt host.DirectedPacket) {
 	sender := dirpckt.Packet.GetSender()
 	clnt.RefreshExpiry()
 	switch dirpckt.Packet.GetType() {
@@ -166,7 +142,7 @@ func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
 	case comms.Packet_SERVER_HANDSHAKE:
 		clnt.HandleHandshake(sender, dirpckt.Packet.GetHandshakeSuccess(), dirpckt.Packet.GetHandshakeKey(), dirpckt.Packet.GetHandshakeSession())
 	case comms.Packet_SERVER_OUTPUT:
-		clnt.HandleOutput(sender, dirpckt.Packet.GetPayload(), dirpckt.Packet.GetNonce())
+		clnt.HandleOutput(sender, dirpckt.Packet.GetPayload())
 	case comms.Packet_SERVER_EXIT:
 		clnt.HandleExit(nil, false)
 	default:
@@ -175,7 +151,7 @@ func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
 }
 
 func (clnt *Client) Connect() {
-	if !clnt.Proxy.IsListening("server", clnt.RemoteHostname) {
+	if !clnt.Host.IsListening("server", clnt.RemoteHostname) {
 		clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
 		return
 	}
@@ -185,13 +161,18 @@ func (clnt *Client) Connect() {
 		clnt.HandleExit(err, false)
 		return
 	}
-	clnt.Proxy.SendPacket(proxy.DirectedPacket{
+	err = clnt.Host.PrepareKeyExchange()
+	if err != nil {
+		clnt.HandleExit(err, false)
+		return
+	}
+	clnt.Host.SendPacket(host.DirectedPacket{
 		Category:  "server",
 		Recipient: clnt.RemoteHostname,
 		Packet: comms.Packet{
 			Type:          comms.Packet_CLIENT_HANDSHAKE,
-			Sender:        clnt.Proxy.Hostname,
-			HandshakeKey:  clnt.PrivateKey.Bytes(),
+			Sender:        clnt.Host.Hostname,
+			HandshakeKey:  clnt.Host.KXPrivateKey.Bytes(),
 			PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
 		},
 	})
@@ -208,12 +189,12 @@ func (clnt *Client) Connect() {
 				clnt.HandleExit(err, true)
 				break
 			}
-			clnt.Proxy.SendPacket(proxy.DirectedPacket{
+			clnt.Host.SendPacket(host.DirectedPacket{
 				Category:  "server-session",
 				Recipient: clnt.ConnectedSession,
 				Packet: comms.Packet{
 					Type:          comms.Packet_CLIENT_PTY_WINCH,
-					Sender:        clnt.Proxy.Hostname,
+					Sender:        clnt.Host.Hostname,
 					PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
 				},
 			})
@@ -228,21 +209,13 @@ func (clnt *Client) Connect() {
 				clnt.HandleExit(err, true)
 				break
 			}
-			nonce := make([]byte, chacha20poly1305.NonceSize)
-			_, err = rand.Read(nonce)
-			if err != nil {
-				clnt.HandleExit(err, true)
-				break
-			}
-			ciphertext := clnt.Cipher.Seal(nil, nonce, buf[:cnt], nil)
-			clnt.Proxy.SendPacket(proxy.DirectedPacket{
+			clnt.Host.SendPacket(host.DirectedPacket{
 				Category:  "server-session",
 				Recipient: clnt.ConnectedSession,
 				Packet: comms.Packet{
 					Type:    comms.Packet_CLIENT_OUTPUT,
-					Sender:  clnt.Proxy.Hostname,
-					Payload: ciphertext,
-					Nonce:   nonce,
+					Sender:  clnt.Host.Hostname,
+					Payload: buf[:cnt],
 				},
 			})
 		}
@@ -258,14 +231,14 @@ func (clnt *Client) Connect() {
 }
 
 func (clnt *Client) Ping() {
-	if !clnt.Proxy.IsListening("server", clnt.RemoteHostname) {
+	if !clnt.Host.IsListening("server", clnt.RemoteHostname) {
 		clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
 		return
 	}
 	start := time.Now()
 	pckt := comms.Packet{
 		Type:   comms.Packet_CLIENT_PING,
-		Sender: clnt.Proxy.Hostname,
+		Sender: clnt.Host.Hostname,
 	}
 	intr := make(chan os.Signal, 1)
 	signal.Notify(intr, os.Interrupt)
@@ -286,12 +259,12 @@ func (clnt *Client) Ping() {
 	}()
 	fmt.Printf("PING %s %d data bytes\n", clnt.RemoteHostname, proto.Size(&pckt))
 	for {
-		if !clnt.Proxy.IsListening("server", clnt.RemoteHostname) {
+		if !clnt.Host.IsListening("server", clnt.RemoteHostname) {
 			clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
 			break
 		}
 		sentTime := time.Now()
-		clnt.Proxy.SendPacket(proxy.DirectedPacket{
+		clnt.Host.SendPacket(host.DirectedPacket{
 			Category:  "server",
 			Recipient: clnt.RemoteHostname,
 			Packet:    pckt,
@@ -330,9 +303,9 @@ func (clnt *Client) StartTimeoutHandler() {
 
 func (clnt *Client) Start() {
 	go clnt.StartTimeoutHandler()
-	clnt.Proxy.Start()
+	clnt.Host.Start()
 }
 
 func (clnt *Client) Close() {
-	clnt.Proxy.Close()
+	clnt.Host.Close()
 }

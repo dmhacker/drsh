@@ -22,17 +22,23 @@ message Packet {
     SERVER_EXIT = 9;
   }
 
-  // Shared fields
+  // All messages
   PacketType type = 1;
   string sender = 2; // Unique name of sending machine
-  bytes payload = 3; // Used by OUTPUT messages
-  bytes nonce = 4; // Used by OUTPUT messages
-  bytes handshake_key = 5; // Used by HANDSHAKE messages
-  
-  // Client only fields
-  uint64 pty_dimensions = 6;
 
-  // Server only fields
+  // Output messages
+  bytes payload = 3;
+  
+  // Window change messages
+  uint64 pty_dimensions = 4;
+
+  // Handshake messages
+  bytes handshake_key = 5;
   bool handshake_success = 7;
   string handshake_session = 8;
+}
+
+message EncryptedPacket {
+  bytes ciphertext = 1;
+  bytes nonce = 2;
 }

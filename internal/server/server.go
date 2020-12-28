@@ -4,13 +4,13 @@ import (
 	"context"
 
 	"github.com/dmhacker/drsh/internal/comms"
-	"github.com/dmhacker/drsh/internal/proxy"
+	"github.com/dmhacker/drsh/internal/host"
 	"github.com/dmhacker/drsh/internal/util"
 	"go.uber.org/zap"
 )
 
 type Server struct {
-	Proxy  *proxy.RedisProxy
+	Host   *host.RedisHost
 	Logger *zap.SugaredLogger
 }
 
@@ -20,59 +20,55 @@ func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server,
 	serv := Server{
 		Logger: logger,
 	}
-	prx, err := proxy.NewRedisProxy("server", hostname, uri, logger, serv.HandlePacket)
+	hst, err := host.NewRedisHost("server", hostname, uri, logger, serv.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
-	serv.Proxy = prx
+	serv.Host = hst
 	return &serv, nil
 }
 
 func (serv *Server) HandlePing(sender string) {
 	// Send an identical response packet back with public information
-	serv.Proxy.SendPacket(proxy.DirectedPacket{
+	serv.Host.SendPacket(host.DirectedPacket{
 		Category:  "client",
 		Recipient: sender,
 		Packet: comms.Packet{
 			Type:   comms.Packet_SERVER_PING,
-			Sender: serv.Proxy.Hostname,
+			Sender: serv.Host.Hostname,
 		},
 	})
 }
 
 func (serv *Server) HandleHandshake(sender string, key []byte, packedDims uint64) {
-	session, err := NewSessionFromHandshake(serv, sender, key)
-	if err != nil {
-		serv.Logger.Errorf("Failed to setup session with '%s': %s", sender, err)
-		serv.Proxy.SendPacket(proxy.DirectedPacket{
-			Category:  "client",
-			Recipient: sender,
-			Packet: comms.Packet{
-				Type:             comms.Packet_SERVER_HANDSHAKE,
-				Sender:           serv.Proxy.Hostname,
-				HandshakeSuccess: false,
-			},
-		})
-		return
-	}
-	serv.Proxy.SendPacket(proxy.DirectedPacket{
+	resp := host.DirectedPacket{
 		Category:  "client",
 		Recipient: sender,
 		Packet: comms.Packet{
-			Type:             comms.Packet_SERVER_HANDSHAKE,
-			Sender:           serv.Proxy.Hostname,
-			HandshakeKey:     session.PrivateKey.Bytes(),
-			HandshakeSession: session.Proxy.Hostname,
-			HandshakeSuccess: true,
+			Type:   comms.Packet_SERVER_HANDSHAKE,
+			Sender: serv.Host.Hostname,
 		},
-	})
-	serv.Logger.Infof("'%s' has joined session %s.", sender, session.Proxy.Hostname)
-	dims := util.Unpack64(packedDims)
-	session.HandlePty(dims[0], dims[1], dims[2], dims[3])
-	go session.Start()
+	}
+	session, err := NewSessionFromHandshake(serv, sender, key)
+	if err != nil {
+		resp.Packet.HandshakeSuccess = false
+		serv.Host.SendPacket(resp)
+		serv.Logger.Errorf("Failed to setup session with '%s': %s", sender, err)
+	} else {
+		resp.Packet.HandshakeSuccess = true
+		resp.Packet.HandshakeKey = session.Host.KXPrivateKey.Bytes()
+		resp.Packet.HandshakeSession = session.Host.Hostname
+		serv.Host.SendPacket(resp)
+		serv.Logger.Infof("'%s' has joined session %s.", sender, session.Host.Hostname)
+		dims := util.Unpack64(packedDims)
+		session.HandlePty(dims[0], dims[1], dims[2], dims[3])
+		session.Host.FreePrivateKeys()
+		session.Host.SetEncryptionEnabled(true)
+		go session.Start()
+	}
 }
 
-func (serv *Server) HandlePacket(dirpckt proxy.DirectedPacket) {
+func (serv *Server) HandlePacket(dirpckt host.DirectedPacket) {
 	sender := dirpckt.Packet.GetSender()
 	switch dirpckt.Packet.GetType() {
 	case comms.Packet_CLIENT_PING:
@@ -85,10 +81,10 @@ func (serv *Server) HandlePacket(dirpckt proxy.DirectedPacket) {
 }
 
 func (serv *Server) Start() {
-	serv.Proxy.Start()
+	serv.Host.Start()
 	<-make(chan int)
 }
 
 func (serv *Server) Close() {
-	serv.Proxy.Close()
+	serv.Host.Close()
 }

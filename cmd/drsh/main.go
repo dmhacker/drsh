@@ -70,7 +70,7 @@ func RunServe(cmd *cobra.Command, args []string) {
 	if err != nil {
 		er(err)
 	}
-	sugar.Infof("Started server '%s'", serv.Proxy.Hostname)
+	sugar.Infof("Started server '%s'", serv.Host.Hostname)
 	defer serv.Close()
 	serv.Start()
 }
