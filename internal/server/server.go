@@ -5,7 +5,6 @@ import (
 
 	"github.com/dmhacker/drsh/internal/comms"
 	"github.com/dmhacker/drsh/internal/host"
-	"github.com/dmhacker/drsh/internal/util"
 	"go.uber.org/zap"
 )
 
@@ -40,7 +39,7 @@ func (serv *Server) HandlePing(sender string) {
 	})
 }
 
-func (serv *Server) HandleHandshake(sender string, key []byte, packedDims uint64) {
+func (serv *Server) HandleHandshake(sender string, key []byte) {
 	resp := host.DirectedPacket{
 		Category:  "client",
 		Recipient: sender,
@@ -51,17 +50,15 @@ func (serv *Server) HandleHandshake(sender string, key []byte, packedDims uint64
 	}
 	session, err := NewSessionFromHandshake(serv, sender, key)
 	if err != nil {
+		serv.Logger.Errorf("Failed to setup session with '%s': %s", sender, err)
 		resp.Packet.HandshakeSuccess = false
 		serv.Host.SendPacket(resp)
-		serv.Logger.Errorf("Failed to setup session with '%s': %s", sender, err)
 	} else {
+		serv.Logger.Infof("'%s' has joined session %s.", sender, session.Host.Hostname)
 		resp.Packet.HandshakeSuccess = true
 		resp.Packet.HandshakeKey = session.Host.KXPrivateKey.Bytes()
 		resp.Packet.HandshakeSession = session.Host.Hostname
 		serv.Host.SendPacket(resp)
-		serv.Logger.Infof("'%s' has joined session %s.", sender, session.Host.Hostname)
-		dims := util.Unpack64(packedDims)
-		session.HandlePty(dims[0], dims[1], dims[2], dims[3])
 		session.Host.FreePrivateKeys()
 		session.Host.SetEncryptionEnabled(true)
 		go session.Start()
@@ -74,7 +71,7 @@ func (serv *Server) HandlePacket(dirpckt host.DirectedPacket) {
 	case comms.Packet_CLIENT_PING:
 		serv.HandlePing(sender)
 	case comms.Packet_CLIENT_HANDSHAKE:
-		serv.HandleHandshake(sender, dirpckt.Packet.GetHandshakeKey(), dirpckt.Packet.GetPtyDimensions())
+		serv.HandleHandshake(sender, dirpckt.Packet.GetHandshakeKey())
 	default:
 		serv.Logger.Errorf("Received invalid packet from '%s'.", sender)
 	}

@@ -24,6 +24,7 @@ type Session struct {
 	LastPacketTimestamp time.Time
 	Logger              *zap.SugaredLogger
 	Client              string
+	Resized             bool
 	Finished            chan bool
 }
 
@@ -55,8 +56,8 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte) (*Session, e
 		Client:              clnt,
 		Pty:                 ptmx,
 		LastPacketTimestamp: time.Now(),
-		LastPacketMutex:     sync.Mutex{},
 		Logger:              serv.Logger,
+		Resized:             false,
 	}
 
 	// Set up session properties & Redis connection
@@ -108,6 +109,10 @@ func (session *Session) HandlePty(rows uint16, cols uint16, xpixels uint16, ypix
 		X:    xpixels,
 		Y:    ypixels,
 	})
+	if !session.Resized {
+		go session.StartOutputHandler()
+	}
+	session.Resized = true
 }
 
 func (session *Session) HandleExit(err error, ack bool) {
@@ -183,7 +188,6 @@ func (session *Session) StartTimeoutHandler() {
 func (session *Session) Start() {
 	go session.StartTimeoutHandler()
 	session.Host.Start()
-	go session.StartOutputHandler()
 	<-session.Finished
 }
 

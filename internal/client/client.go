@@ -156,12 +156,7 @@ func (clnt *Client) Connect() {
 		return
 	}
 	// Send handshake request to the server
-	ws, err := util.TerminalSize()
-	if err != nil {
-		clnt.HandleExit(err, false)
-		return
-	}
-	err = clnt.Host.PrepareKeyExchange()
+	err := clnt.Host.PrepareKeyExchange()
 	if err != nil {
 		clnt.HandleExit(err, false)
 		return
@@ -170,10 +165,9 @@ func (clnt *Client) Connect() {
 		Category:  "server",
 		Recipient: clnt.RemoteHostname,
 		Packet: comms.Packet{
-			Type:          comms.Packet_CLIENT_HANDSHAKE,
-			Sender:        clnt.Host.Hostname,
-			HandshakeKey:  clnt.Host.KXPrivateKey.Bytes(),
-			PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
+			Type:         comms.Packet_CLIENT_HANDSHAKE,
+			Sender:       clnt.Host.Hostname,
+			HandshakeKey: clnt.Host.KXPrivateKey.Bytes(),
 		},
 	})
 	// Wait until we have received a handshake response from the server
@@ -200,6 +194,7 @@ func (clnt *Client) Connect() {
 			})
 		}
 	})()
+	winchChan <- syscall.SIGWINCH
 	// Capture input in packets and send to server
 	go (func() {
 		for {
