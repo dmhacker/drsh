@@ -115,42 +115,36 @@ func (session *Session) HandlePty(rows uint16, cols uint16, xpixels uint16, ypix
 }
 
 func (session *Session) HandleExit(err error, ack bool) {
-	// Send an acknowledgement back to the client to indicate that we have
-	// closed the session on the server's end
-	if ack {
-		session.Host.SendPacket(host.DirectedPacket{
-			Recipient: session.Client,
-			Packet: comms.Packet{
-				Type:   comms.Packet_SERVER_EXIT,
-				Sender: session.Host.Hostname,
-			},
-		})
-	}
 	if err != nil {
 		session.Logger.Infof("'%s' has left session %s: %s.", session.Client, session.Host.Hostname, err.Error())
 	} else {
 		session.Logger.Infof("'%s' has left session %s.", session.Client, session.Host.Hostname)
 	}
+	if ack {
+		session.Host.SendPacket(session.Client, comms.Packet{
+			Type:   comms.Packet_SERVER_EXIT,
+			Sender: session.Host.Hostname,
+		})
+	}
 	session.Close()
 }
 
-func (session *Session) HandlePacket(dirpckt host.DirectedPacket) {
-	sender := dirpckt.Packet.GetSender()
-	if sender != session.Client {
-		session.Logger.Errorf("Invalid participant in session '%s'.", sender)
+func (session *Session) HandlePacket(pckt comms.Packet) {
+	if pckt.GetSender() != session.Client {
+		session.Logger.Errorf("Invalid participant '%s' in session %s.", pckt.GetSender(), session.Host.Hostname)
 		return
 	}
 	session.RefreshExpiry()
-	switch dirpckt.Packet.GetType() {
+	switch pckt.GetType() {
 	case comms.Packet_CLIENT_OUTPUT:
-		session.HandleOutput(dirpckt.Packet.GetPayload())
+		session.HandleOutput(pckt.GetPayload())
 	case comms.Packet_CLIENT_PTY_WINCH:
-		dims := util.Unpack64(dirpckt.Packet.GetPtyDimensions())
+		dims := util.Unpack64(pckt.GetPtyDimensions())
 		session.HandlePty(dims[0], dims[1], dims[2], dims[3])
 	case comms.Packet_CLIENT_EXIT:
 		session.HandleExit(nil, false)
 	default:
-		session.Logger.Errorf("Received invalid packet from '%s'.", sender)
+		session.Logger.Errorf("Received invalid packet from '%s'.", pckt.GetSender())
 	}
 }
 
@@ -165,13 +159,10 @@ func (session *Session) StartOutputHandler() {
 			session.HandleExit(err, true)
 			break
 		}
-		session.Host.SendPacket(host.DirectedPacket{
-			Recipient: session.Client,
-			Packet: comms.Packet{
-				Type:    comms.Packet_SERVER_OUTPUT,
-				Sender:  session.Host.Hostname,
-				Payload: buf[:cnt],
-			},
+		session.Host.SendPacket(session.Client, comms.Packet{
+			Type:    comms.Packet_SERVER_OUTPUT,
+			Sender:  session.Host.Hostname,
+			Payload: buf[:cnt],
 		})
 		// This delay is chosen such that output from the pty is able to
 		// buffer, resulting larger packets, more efficient usage of the link,

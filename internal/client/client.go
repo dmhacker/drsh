@@ -115,12 +115,9 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	if ack {
-		clnt.Host.SendPacket(host.DirectedPacket{
-			Recipient: clnt.RemoteHostname,
-			Packet: comms.Packet{
-				Type:   comms.Packet_CLIENT_EXIT,
-				Sender: clnt.Host.Hostname,
-			},
+		clnt.Host.SendPacket(clnt.RemoteHostname, comms.Packet{
+			Type:   comms.Packet_CLIENT_EXIT,
+			Sender: clnt.Host.Hostname,
 		})
 		// Add a slight delay so the disconnect packet can send
 		time.Sleep(100 * time.Millisecond)
@@ -132,20 +129,19 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 	}
 }
 
-func (clnt *Client) HandlePacket(dirpckt host.DirectedPacket) {
-	sender := dirpckt.Packet.GetSender()
+func (clnt *Client) HandlePacket(pckt comms.Packet) {
 	clnt.RefreshExpiry()
-	switch dirpckt.Packet.GetType() {
+	switch pckt.GetType() {
 	case comms.Packet_SERVER_PING:
-		clnt.HandlePing(sender, proto.Size(&dirpckt.Packet))
+		clnt.HandlePing(pckt.GetSender(), proto.Size(&pckt))
 	case comms.Packet_SERVER_HANDSHAKE:
-		clnt.HandleHandshake(sender, dirpckt.Packet.GetHandshakeSuccess(), dirpckt.Packet.GetHandshakeKey(), dirpckt.Packet.GetHandshakeSession())
+		clnt.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeSuccess(), pckt.GetHandshakeKey(), pckt.GetHandshakeSession())
 	case comms.Packet_SERVER_OUTPUT:
-		clnt.HandleOutput(sender, dirpckt.Packet.GetPayload())
+		clnt.HandleOutput(pckt.GetSender(), pckt.GetPayload())
 	case comms.Packet_SERVER_EXIT:
 		clnt.HandleExit(nil, false)
 	default:
-		clnt.Logger.Errorf("Received invalid packet from '%s'.", sender)
+		clnt.Logger.Errorf("Received invalid packet from '%s'.", pckt.GetSender())
 	}
 }
 
@@ -160,13 +156,10 @@ func (clnt *Client) Connect() {
 		clnt.HandleExit(err, false)
 		return
 	}
-	clnt.Host.SendPacket(host.DirectedPacket{
-		Recipient: clnt.RemoteHostname,
-		Packet: comms.Packet{
-			Type:         comms.Packet_CLIENT_HANDSHAKE,
-			Sender:       clnt.Host.Hostname,
-			HandshakeKey: clnt.Host.KXPrivateKey.Bytes(),
-		},
+	clnt.Host.SendPacket(clnt.RemoteHostname, comms.Packet{
+		Type:         comms.Packet_CLIENT_HANDSHAKE,
+		Sender:       clnt.Host.Hostname,
+		HandshakeKey: clnt.Host.KXPrivateKey.Bytes(),
 	})
 	// Wait until we have received a handshake response from the server
 	// This will put us into our own server session
@@ -181,13 +174,10 @@ func (clnt *Client) Connect() {
 				clnt.HandleExit(err, true)
 				break
 			}
-			clnt.Host.SendPacket(host.DirectedPacket{
-				Recipient: clnt.ConnectedSession,
-				Packet: comms.Packet{
-					Type:          comms.Packet_CLIENT_PTY_WINCH,
-					Sender:        clnt.Host.Hostname,
-					PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
-				},
+			clnt.Host.SendPacket(clnt.ConnectedSession, comms.Packet{
+				Type:          comms.Packet_CLIENT_PTY_WINCH,
+				Sender:        clnt.Host.Hostname,
+				PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
 			})
 		}
 	})()
@@ -201,13 +191,10 @@ func (clnt *Client) Connect() {
 				clnt.HandleExit(err, true)
 				break
 			}
-			clnt.Host.SendPacket(host.DirectedPacket{
-				Recipient: clnt.ConnectedSession,
-				Packet: comms.Packet{
-					Type:    comms.Packet_CLIENT_OUTPUT,
-					Sender:  clnt.Host.Hostname,
-					Payload: buf[:cnt],
-				},
+			clnt.Host.SendPacket(clnt.ConnectedSession, comms.Packet{
+				Type:    comms.Packet_CLIENT_OUTPUT,
+				Sender:  clnt.Host.Hostname,
+				Payload: buf[:cnt],
 			})
 		}
 	})()
@@ -255,10 +242,7 @@ func (clnt *Client) Ping() {
 			break
 		}
 		sentTime := time.Now()
-		clnt.Host.SendPacket(host.DirectedPacket{
-			Recipient: clnt.RemoteHostname,
-			Packet:    pckt,
-		})
+		clnt.Host.SendPacket(clnt.RemoteHostname, pckt)
 		sentCnt++
 		var resp PingResponse
 		for {

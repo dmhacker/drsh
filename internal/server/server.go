@@ -28,50 +28,42 @@ func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server,
 }
 
 func (serv *Server) HandlePing(sender string) {
-	// Send an identical response packet back with public information
-	serv.Host.SendPacket(host.DirectedPacket{
-		Recipient: sender,
-		Packet: comms.Packet{
-			Type:   comms.Packet_SERVER_PING,
-			Sender: serv.Host.Hostname,
-		},
+	serv.Host.SendPacket(sender, comms.Packet{
+		Type:   comms.Packet_SERVER_PING,
+		Sender: serv.Host.Hostname,
 	})
 }
 
 func (serv *Server) HandleHandshake(sender string, key []byte) {
-	resp := host.DirectedPacket{
-		Recipient: sender,
-		Packet: comms.Packet{
-			Type:   comms.Packet_SERVER_HANDSHAKE,
-			Sender: serv.Host.Hostname,
-		},
+	resp := comms.Packet{
+		Type:   comms.Packet_SERVER_HANDSHAKE,
+		Sender: serv.Host.Hostname,
 	}
 	session, err := NewSessionFromHandshake(serv, sender, key)
 	if err != nil {
 		serv.Logger.Errorf("Failed to setup session with '%s': %s", sender, err)
-		resp.Packet.HandshakeSuccess = false
-		serv.Host.SendPacket(resp)
+		resp.HandshakeSuccess = false
+		serv.Host.SendPacket(sender, resp)
 	} else {
 		serv.Logger.Infof("'%s' has joined session %s.", sender, session.Host.Hostname)
-		resp.Packet.HandshakeSuccess = true
-		resp.Packet.HandshakeKey = session.Host.KXPrivateKey.Bytes()
-		resp.Packet.HandshakeSession = session.Host.Hostname
-		serv.Host.SendPacket(resp)
+		resp.HandshakeSuccess = true
+		resp.HandshakeKey = session.Host.KXPrivateKey.Bytes()
+		resp.HandshakeSession = session.Host.Hostname
+		serv.Host.SendPacket(sender, resp)
 		session.Host.FreePrivateKeys()
 		session.Host.SetEncryptionEnabled(true)
 		session.Start()
 	}
 }
 
-func (serv *Server) HandlePacket(dirpckt host.DirectedPacket) {
-	sender := dirpckt.Packet.GetSender()
-	switch dirpckt.Packet.GetType() {
+func (serv *Server) HandlePacket(pckt comms.Packet) {
+	switch pckt.GetType() {
 	case comms.Packet_CLIENT_PING:
-		serv.HandlePing(sender)
+		serv.HandlePing(pckt.GetSender())
 	case comms.Packet_CLIENT_HANDSHAKE:
-		serv.HandleHandshake(sender, dirpckt.Packet.GetHandshakeKey())
+		serv.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeKey())
 	default:
-		serv.Logger.Errorf("Received invalid packet from '%s'.", sender)
+		serv.Logger.Errorf("Received invalid packet from '%s'.", pckt.GetSender())
 	}
 }
 

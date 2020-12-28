@@ -5,7 +5,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +16,7 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-type DirectedPacket struct {
+type OutgoingPacket struct {
 	Recipient     string
 	Packet        comms.Packet
 	ShouldEncrypt bool
@@ -29,9 +28,9 @@ type RedisHost struct {
 	Rdb          *redis.Client
 	Rps          *redis.PubSub
 	Inherited    bool
-	Outgoing     chan DirectedPacket
+	Outgoing     chan OutgoingPacket
 	Logger       *zap.SugaredLogger
-	Handler      func(DirectedPacket)
+	Handler      func(comms.Packet)
 	ReadyMtx     sync.Mutex
 	ReadyFlag    bool
 	ReadyCnd     *sync.Cond
@@ -46,7 +45,7 @@ type RedisHost struct {
 
 var ctx = context.Background()
 
-func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisHost, error) {
+func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger, handler func(comms.Packet)) (*RedisHost, error) {
 	if hostname == "" {
 		return nil, fmt.Errorf("hostname cannot be empty")
 	}
@@ -58,7 +57,7 @@ func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger, handle
 		Hostname:  hostname,
 		Rdb:       redis.NewClient(opt),
 		Inherited: false,
-		Outgoing:  make(chan DirectedPacket, 10),
+		Outgoing:  make(chan OutgoingPacket, 10),
 		Logger:    logger,
 		Handler:   handler,
 		ReadyFlag: false,
@@ -77,7 +76,7 @@ func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger, handle
 	return &host, nil
 }
 
-func InheritRedisHost(hostname string, rdb *redis.Client, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisHost, error) {
+func InheritRedisHost(hostname string, rdb *redis.Client, logger *zap.SugaredLogger, handler func(comms.Packet)) (*RedisHost, error) {
 	if hostname == "" {
 		return nil, fmt.Errorf("hostname cannot be empty")
 	}
@@ -85,7 +84,7 @@ func InheritRedisHost(hostname string, rdb *redis.Client, logger *zap.SugaredLog
 		Hostname:  hostname,
 		Rdb:       rdb,
 		Inherited: true,
-		Outgoing:  make(chan DirectedPacket, 10),
+		Outgoing:  make(chan OutgoingPacket, 10),
 		Logger:    logger,
 		Handler:   handler,
 		ReadyFlag: false,
@@ -115,9 +114,13 @@ func (host *RedisHost) IsListening(hostname string) bool {
 	return err == nil && len(channels) > 0
 }
 
-func (host *RedisHost) SendPacket(dirpckt DirectedPacket) {
-	dirpckt.ShouldEncrypt = host.IsEncryptionEnabled()
-	host.Outgoing <- dirpckt
+func (host *RedisHost) SendPacket(recipient string, pckt comms.Packet) {
+	host.Outgoing <- OutgoingPacket{
+		Recipient:     recipient,
+		Packet:        pckt,
+		ShouldEncrypt: host.IsEncryptionEnabled(),
+		ShouldKill:    false,
+	}
 }
 
 func (host *RedisHost) IsEncryptionEnabled() bool {
@@ -208,12 +211,9 @@ func (host *RedisHost) WaitUntilReady() {
 			if ready {
 				break
 			}
-			host.SendPacket(DirectedPacket{
-				Recipient: host.Hostname,
-				Packet: comms.Packet{
-					Type:   comms.Packet_READY,
-					Sender: host.Hostname,
-				},
+			host.SendPacket(host.Hostname, comms.Packet{
+				Type:   comms.Packet_READY,
+				Sender: host.Hostname,
 			})
 			time.Sleep(500 * time.Millisecond)
 		}
@@ -226,24 +226,24 @@ func (host *RedisHost) WaitUntilReady() {
 }
 
 func (host *RedisHost) StartPacketSender() {
-	for dirpckt := range host.Outgoing {
-		if dirpckt.ShouldKill {
+	for opckt := range host.Outgoing {
+		if opckt.ShouldKill {
 			break
 		}
-		raw, err := proto.Marshal(&dirpckt.Packet)
+		raw, err := proto.Marshal(&opckt.Packet)
 		if err != nil {
 			host.Logger.Errorf("Failed to marshal packet: %s", err)
 			continue
 		}
 		encrypted := raw
-		if dirpckt.ShouldEncrypt {
+		if opckt.ShouldEncrypt {
 			encrypted, err = host.EncryptPacket(raw)
 			if err != nil {
 				host.Logger.Errorf("Failed to encrypt packet: %s", err)
 				continue
 			}
 		}
-		err = host.Rdb.Publish(ctx, "drsh:"+dirpckt.Recipient, encrypted).Err()
+		err = host.Rdb.Publish(ctx, "drsh:"+opckt.Recipient, encrypted).Err()
 		if err != nil {
 			// If the host is closed, this is likely a normal shutdown event
 			if host.IsOpen() {
@@ -276,29 +276,21 @@ func (host *RedisHost) StartPacketReceiver() {
 				continue
 			}
 		}
-		components := strings.Split(msg.Channel, ":")
-		if len(components) != 2 || components[0] != "drsh" {
-			host.Logger.Errorf("Failed to validate channel: %s", msg.Channel)
-			continue
-		}
-		dirpckt := DirectedPacket{
-			Recipient: components[1],
-			Packet:    comms.Packet{},
-		}
-		err = proto.Unmarshal(raw, &dirpckt.Packet)
+		pckt := comms.Packet{}
+		err = proto.Unmarshal(raw, &pckt)
 		if err != nil {
 			host.Logger.Errorf("Failed to unmarshal packet: %s", err)
 			continue
 		}
-		sender := dirpckt.Packet.GetSender()
-		if dirpckt.Packet.GetType() == comms.Packet_READY && sender == host.Hostname {
+		sender := pckt.GetSender()
+		if pckt.GetType() == comms.Packet_READY && sender == host.Hostname {
 			host.ReadyMtx.Lock()
 			host.ReadyFlag = true
 			host.ReadyCnd.Signal()
 			host.ReadyMtx.Unlock()
 			continue
 		}
-		host.Handler(dirpckt)
+		host.Handler(pckt)
 	}
 }
 
@@ -314,7 +306,7 @@ func (host *RedisHost) Close() {
 	host.OpenState = false
 	host.OpenMtx.Unlock()
 	// Kills the packet handler
-	host.Outgoing <- DirectedPacket{
+	host.Outgoing <- OutgoingPacket{
 		ShouldKill: true,
 	}
 	// Kills the packet receiver
