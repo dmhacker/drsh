@@ -61,7 +61,7 @@ func (serv *Server) HandleHandshake(sender string, key []byte) {
 		serv.Host.SendPacket(resp)
 		session.Host.FreePrivateKeys()
 		session.Host.SetEncryptionEnabled(true)
-		go session.Start()
+		session.Start()
 	}
 }
 
@@ -79,7 +79,6 @@ func (serv *Server) HandlePacket(dirpckt host.DirectedPacket) {
 
 func (serv *Server) Start() {
 	serv.Host.Start()
-	<-make(chan int)
 }
 
 func (serv *Server) Close() {

@@ -18,10 +18,11 @@ import (
 )
 
 type DirectedPacket struct {
-	Category     string
-	Recipient    string
-	Packet       comms.Packet
-	NeedsEncrypt bool
+	Category      string
+	Recipient     string
+	Packet        comms.Packet
+	ShouldEncrypt bool
+	ShouldKill    bool
 }
 
 type RedisHost struct {
@@ -29,6 +30,7 @@ type RedisHost struct {
 	Category     string
 	Rdb          *redis.Client
 	Rps          *redis.PubSub
+	Inherited    bool
 	Outgoing     chan DirectedPacket
 	Logger       *zap.SugaredLogger
 	Handler      func(DirectedPacket)
@@ -40,6 +42,8 @@ type RedisHost struct {
 	KXPrivateKey *dhkx.DHKey
 	KXCipher     cipher.AEAD
 	KXEnabled    bool
+	OpenMtx      sync.Mutex
+	OpenState    bool
 }
 
 var ctx = context.Background()
@@ -56,11 +60,13 @@ func NewRedisHost(category string, hostname string, uri string, logger *zap.Suga
 		Hostname:  hostname,
 		Category:  category,
 		Rdb:       redis.NewClient(opt),
+		Inherited: false,
 		Outgoing:  make(chan DirectedPacket, 10),
 		Logger:    logger,
 		Handler:   handler,
 		ReadyFlag: false,
 		KXEnabled: false,
+		OpenState: true,
 	}
 	host.ReadyCnd = sync.NewCond(&host.ReadyMtx)
 	err = host.Rdb.Ping(ctx).Err()
@@ -82,11 +88,13 @@ func InheritRedisHost(category string, hostname string, rdb *redis.Client, logge
 		Hostname:  hostname,
 		Category:  category,
 		Rdb:       rdb,
+		Inherited: true,
 		Outgoing:  make(chan DirectedPacket, 10),
 		Logger:    logger,
 		Handler:   handler,
 		ReadyFlag: false,
 		KXEnabled: false,
+		OpenState: true,
 	}
 	host.ReadyCnd = sync.NewCond(&host.ReadyMtx)
 	err := host.Rdb.Ping(ctx).Err()
@@ -100,13 +108,19 @@ func InheritRedisHost(category string, hostname string, rdb *redis.Client, logge
 	return &host, nil
 }
 
+func (host *RedisHost) IsOpen() bool {
+	host.OpenMtx.Lock()
+	defer host.OpenMtx.Unlock()
+	return host.OpenState
+}
+
 func (host *RedisHost) IsListening(category string, hostname string) bool {
 	channels, err := host.Rdb.PubSubChannels(ctx, "drsh:"+category+":"+hostname).Result()
 	return err == nil && len(channels) > 0
 }
 
 func (host *RedisHost) SendPacket(dirpckt DirectedPacket) {
-	dirpckt.NeedsEncrypt = host.IsEncryptionEnabled()
+	dirpckt.ShouldEncrypt = host.IsEncryptionEnabled()
 	host.Outgoing <- dirpckt
 }
 
@@ -218,6 +232,9 @@ func (host *RedisHost) WaitUntilReady() {
 
 func (host *RedisHost) StartPacketSender() {
 	for dirpckt := range host.Outgoing {
+		if dirpckt.ShouldKill {
+			break
+		}
 		channel := "drsh:" + dirpckt.Category + ":" + dirpckt.Recipient
 		raw, err := proto.Marshal(&dirpckt.Packet)
 		if err != nil {
@@ -225,7 +242,7 @@ func (host *RedisHost) StartPacketSender() {
 			continue
 		}
 		encrypted := raw
-		if dirpckt.NeedsEncrypt {
+		if dirpckt.ShouldEncrypt {
 			encrypted, err = host.EncryptPacket(raw)
 			if err != nil {
 				host.Logger.Errorf("Failed to encrypt packet: %s", err)
@@ -235,7 +252,7 @@ func (host *RedisHost) StartPacketSender() {
 		err = host.Rdb.Publish(ctx, channel, encrypted).Err()
 		if err != nil {
 			host.Logger.Errorf("Failed to publish packet: %s", err)
-			continue
+			break
 		}
 	}
 }
@@ -245,7 +262,7 @@ func (host *RedisHost) StartPacketReceiver() {
 		msg, err := host.Rps.ReceiveMessage(ctx)
 		if err != nil {
 			host.Logger.Errorf("Failed to receive packet: %s", err)
-			continue
+			break
 		}
 		raw := []byte(msg.Payload)
 		if host.IsEncryptionEnabled() {
@@ -289,6 +306,18 @@ func (host *RedisHost) Start() {
 }
 
 func (host *RedisHost) Close() {
+	// Indicate that we are closed
+	host.OpenMtx.Lock()
+	host.OpenState = false
+	host.OpenMtx.Unlock()
+	// Kills the packet handler
+	host.Outgoing <- DirectedPacket{
+		ShouldKill: true,
+	}
+	// Kills the packet receiver
 	host.Rps.Close()
-	host.Rdb.Close()
+	// Disposes of the Redis connection
+	if !host.Inherited {
+		host.Rdb.Close()
+	}
 }

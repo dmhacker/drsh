@@ -20,12 +20,11 @@ import (
 type Session struct {
 	Host                *host.RedisHost
 	Pty                 *os.File
-	LastPacketMutex     sync.Mutex
-	LastPacketTimestamp time.Time
 	Logger              *zap.SugaredLogger
 	Client              string
 	Resized             bool
-	Finished            chan bool
+	LastPacketMutex     sync.Mutex
+	LastPacketTimestamp time.Time
 }
 
 func NewSessionFromHandshake(serv *Server, clnt string, key []byte) (*Session, error) {
@@ -55,9 +54,9 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte) (*Session, e
 	session := Session{
 		Client:              clnt,
 		Pty:                 ptmx,
-		LastPacketTimestamp: time.Now(),
 		Logger:              serv.Logger,
 		Resized:             false,
+		LastPacketTimestamp: time.Now(),
 	}
 
 	// Set up session properties & Redis connection
@@ -133,7 +132,7 @@ func (session *Session) HandleExit(err error, ack bool) {
 	} else {
 		session.Logger.Infof("'%s' has left session %s.", session.Client, session.Host.Hostname)
 	}
-	session.Finished <- true
+	session.Close()
 }
 
 func (session *Session) HandlePacket(dirpckt host.DirectedPacket) {
@@ -158,6 +157,9 @@ func (session *Session) HandlePacket(dirpckt host.DirectedPacket) {
 
 func (session *Session) StartOutputHandler() {
 	for {
+		if !session.Host.IsOpen() {
+			break
+		}
 		buf := make([]byte, 4096)
 		cnt, err := session.Pty.Read(buf)
 		if err != nil {
@@ -183,6 +185,9 @@ func (session *Session) StartOutputHandler() {
 
 func (session *Session) StartTimeoutHandler() {
 	for {
+		if !session.Host.IsOpen() {
+			break
+		}
 		if session.IsExpired() {
 			session.HandleExit(fmt.Errorf("client timed out"), true)
 		}
@@ -193,10 +198,9 @@ func (session *Session) StartTimeoutHandler() {
 func (session *Session) Start() {
 	go session.StartTimeoutHandler()
 	session.Host.Start()
-	<-session.Finished
 }
 
 func (session *Session) Close() {
-	session.Host.Rps.Close()
 	session.Pty.Close()
+	session.Host.Close()
 }
