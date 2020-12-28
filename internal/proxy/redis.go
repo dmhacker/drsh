@@ -24,7 +24,6 @@ type RedisProxy struct {
 	Category  string
 	Rdb       *redis.Client
 	Rps       *redis.PubSub
-	Incoming  chan DirectedPacket
 	Outgoing  chan DirectedPacket
 	Logger    *zap.SugaredLogger
 	Handler   func(DirectedPacket)
@@ -47,7 +46,6 @@ func NewRedisProxy(category string, hostname string, uri string, logger *zap.Sug
 		Hostname:  hostname,
 		Category:  category,
 		Rdb:       redis.NewClient(opt),
-		Incoming:  make(chan DirectedPacket, 10),
 		Outgoing:  make(chan DirectedPacket, 10),
 		Logger:    logger,
 		Handler:   handler,
@@ -101,26 +99,7 @@ func (prx *RedisProxy) WaitUntilReady() {
 	}
 }
 
-func (prx *RedisProxy) StartPacketHandler() {
-	// Any incoming packets over the channel have preliminary
-	// checks performed on them and then are handled by type
-	for dirpckt := range prx.Incoming {
-		pckt := dirpckt.Packet
-		sender := pckt.GetSender()
-		if pckt.GetType() == comms.Packet_READY && sender == prx.Hostname {
-			prx.ReadyMtx.Lock()
-			prx.ReadyFlag = true
-			prx.ReadyCnd.Signal()
-			prx.ReadyMtx.Unlock()
-			continue
-		}
-		prx.Handler(dirpckt)
-	}
-}
-
 func (prx *RedisProxy) StartPacketSender() {
-	// Any outgoing packets are immediately serialized and then
-	// sent through Redis
 	for dirpckt := range prx.Outgoing {
 		channel := "drsh:"
 		channel += dirpckt.Category + ":"
@@ -156,7 +135,15 @@ func (prx *RedisProxy) StartPacketReceiver() {
 			Packet:    comms.Packet{},
 		}
 		proto.Unmarshal([]byte(msg.Payload), &dirpckt.Packet)
-		prx.Incoming <- dirpckt
+		sender := dirpckt.Packet.GetSender()
+		if dirpckt.Packet.GetType() == comms.Packet_READY && sender == prx.Hostname {
+			prx.ReadyMtx.Lock()
+			prx.ReadyFlag = true
+			prx.ReadyCnd.Signal()
+			prx.ReadyMtx.Unlock()
+			continue
+		}
+		prx.Handler(dirpckt)
 	}
 }
 
@@ -166,7 +153,6 @@ func (prx *RedisProxy) SendPacket(dirpckt DirectedPacket) {
 
 func (prx *RedisProxy) Start() {
 	go prx.StartPacketSender()
-	go prx.StartPacketHandler()
 	go prx.StartPacketReceiver()
 	prx.WaitUntilReady()
 }
