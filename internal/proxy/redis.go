@@ -36,7 +36,7 @@ var ctx = context.Background()
 
 func NewRedisProxy(category string, hostname string, uri string, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisProxy, error) {
 	if hostname == "" {
-		return nil, fmt.Errorf("Hostname cannot be empty")
+		return nil, fmt.Errorf("hostname cannot be empty")
 	}
 	opt, err := redis.ParseURL(uri)
 	if err != nil {
@@ -64,9 +64,39 @@ func NewRedisProxy(category string, hostname string, uri string, logger *zap.Sug
 	return &prx, nil
 }
 
+func InheritRedisProxy(category string, hostname string, rdb *redis.Client, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisProxy, error) {
+	if hostname == "" {
+		return nil, fmt.Errorf("hostname cannot be empty")
+	}
+	prx := RedisProxy{
+		Hostname:  hostname,
+		Category:  category,
+		Rdb:       rdb,
+		Outgoing:  make(chan DirectedPacket, 10),
+		Logger:    logger,
+		Handler:   handler,
+		ReadyMtx:  sync.Mutex{},
+		ReadyFlag: false,
+	}
+	prx.ReadyCnd = sync.NewCond(&prx.ReadyMtx)
+	err := prx.Rdb.Ping(ctx).Err()
+	if err != nil {
+		return nil, err
+	}
+	if prx.IsListening(prx.Category, prx.Hostname) {
+		return nil, fmt.Errorf("hostname is in use already on this network")
+	}
+	prx.Rps = prx.Rdb.Subscribe(ctx, "drsh:"+prx.Category+":"+prx.Hostname)
+	return &prx, nil
+}
+
 func (prx *RedisProxy) IsListening(category string, hostname string) bool {
 	channels, err := prx.Rdb.PubSubChannels(ctx, "drsh:"+category+":"+hostname).Result()
 	return err == nil && len(channels) > 0
+}
+
+func (prx *RedisProxy) SendPacket(dirpckt DirectedPacket) {
+	prx.Outgoing <- dirpckt
 }
 
 func (prx *RedisProxy) WaitUntilReady() {
@@ -145,10 +175,6 @@ func (prx *RedisProxy) StartPacketReceiver() {
 		}
 		prx.Handler(dirpckt)
 	}
-}
-
-func (prx *RedisProxy) SendPacket(dirpckt DirectedPacket) {
-	prx.Outgoing <- dirpckt
 }
 
 func (prx *RedisProxy) Start() {
