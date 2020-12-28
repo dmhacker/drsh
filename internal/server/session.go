@@ -158,7 +158,7 @@ func (session *Session) HandlePacket(dirpckt host.DirectedPacket) {
 
 func (session *Session) StartOutputHandler() {
 	for {
-		buf := make([]byte, 2048)
+		buf := make([]byte, 4096)
 		cnt, err := session.Pty.Read(buf)
 		if err != nil {
 			session.HandleExit(err, true)
@@ -173,6 +173,11 @@ func (session *Session) StartOutputHandler() {
 				Payload: buf[:cnt],
 			},
 		})
+		// This delay is chosen such that output from the pty is able to
+		// buffer, resulting larger packets, more efficient usage of the link,
+		// and more responsiveness for interactive applications like top.
+		// Too large of a delay would create the perception of lag.
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

@@ -198,7 +198,7 @@ func (clnt *Client) Connect() {
 	// Capture input in packets and send to server
 	go (func() {
 		for {
-			buf := make([]byte, 2048)
+			buf := make([]byte, 1096)
 			cnt, err := os.Stdin.Read(buf)
 			if err != nil {
 				clnt.HandleExit(err, true)
