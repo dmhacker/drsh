@@ -4,21 +4,17 @@ import (
 	"context"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
-	"unsafe"
 
-	"github.com/creack/pty"
 	"github.com/dmhacker/drsh/internal/comms"
 	"github.com/dmhacker/drsh/internal/proxy"
 	"github.com/dmhacker/drsh/internal/util"
 	"github.com/golang/protobuf/proto"
-	"github.com/google/uuid"
 	"github.com/monnand/dhkx"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -42,6 +38,7 @@ type Client struct {
 	LastPacketMutex     sync.Mutex
 	LastPacketTimestamp time.Time
 	ConnectedState      bool
+	ConnectedSession    string
 	Pinged              chan PingResponse
 	Connected           chan bool
 	Finished            chan bool
@@ -58,10 +55,6 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 	if err != nil {
 		return nil, err
 	}
-	name, err := uuid.NewRandom()
-	if err != nil {
-		return nil, err
-	}
 	clnt := Client{
 		Logger:              logger,
 		Group:               g,
@@ -75,32 +68,24 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 		Finished:            make(chan bool, 1),
 		Pinged:              make(chan PingResponse, 1),
 	}
-	clnt.Proxy, err = proxy.NewRedisProxy("client", base64.RawURLEncoding.EncodeToString(name[:]), uri, logger, clnt.HandlePacket)
+	name, err := util.RandomName()
+	if err != nil {
+		return nil, err
+	}
+	clnt.Proxy, err = proxy.NewRedisProxy("client", name, uri, logger, clnt.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
 	return &clnt, nil
 }
 
-func (clnt *Client) TerminalSize() *pty.Winsize {
-	ws := new(pty.Winsize)
-	rc, _, _ := syscall.Syscall(syscall.SYS_IOCTL,
-		uintptr(syscall.Stdin),
-		uintptr(syscall.TIOCGWINSZ),
-		uintptr(unsafe.Pointer(ws)))
-	if int(rc) == -1 {
-		clnt.Logger.Fatal("Could not obtain tty dimensions")
-	}
-	return ws
-}
-
-func (clnt *Client) SaveHostTimestamp() {
+func (clnt *Client) RefreshExpiry() {
 	clnt.LastPacketMutex.Lock()
 	defer clnt.LastPacketMutex.Unlock()
 	clnt.LastPacketTimestamp = time.Now()
 }
 
-func (clnt *Client) HostExpired() bool {
+func (clnt *Client) IsExpired() bool {
 	clnt.LastPacketMutex.Lock()
 	defer clnt.LastPacketMutex.Unlock()
 	return time.Now().Sub(clnt.LastPacketTimestamp).Minutes() >= 10
@@ -114,13 +99,13 @@ func (clnt *Client) HandlePing(sender string, size int) {
 	}
 }
 
-func (clnt *Client) HandleHandshake(sender string, key []byte, success bool) {
+func (clnt *Client) HandleHandshake(sender string, success bool, key []byte, session string) {
 	if !success {
 		clnt.HandleExit(fmt.Errorf("server refused connection"), false)
 	}
 	if !clnt.ConnectedState && sender == clnt.RemoteHostname {
-		pkey := dhkx.NewPublicKey(key)
-		skey, err := clnt.Group.ComputeKey(pkey, clnt.PrivateKey)
+		pub := dhkx.NewPublicKey(key)
+		skey, err := clnt.Group.ComputeKey(pub, clnt.PrivateKey)
 		if err != nil {
 			clnt.HandleExit(err, false)
 		}
@@ -129,13 +114,14 @@ func (clnt *Client) HandleHandshake(sender string, key []byte, success bool) {
 		if err != nil {
 			clnt.HandleExit(err, false)
 		}
+		clnt.ConnectedSession = session
 		clnt.ConnectedState = true
 		clnt.Connected <- true
 	}
 }
 
 func (clnt *Client) HandleOutput(sender string, payload []byte, nonce []byte) {
-	if clnt.ConnectedState && sender == clnt.RemoteHostname {
+	if clnt.ConnectedState && sender == clnt.ConnectedSession {
 		plaintext, err := clnt.Cipher.Open(nil, nonce, payload, nil)
 		if err != nil {
 			clnt.HandleExit(err, true)
@@ -150,7 +136,7 @@ func (clnt *Client) HandleOutput(sender string, payload []byte, nonce []byte) {
 
 func (clnt *Client) HandleExit(err error, ack bool) {
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 	}
 	if ack {
 		clnt.Proxy.SendPacket(proxy.DirectedPacket{
@@ -172,18 +158,15 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 }
 
 func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
-	pckt := dirpckt.Packet
-	sender := pckt.GetSender()
-	if clnt.ConnectedState && clnt.RemoteHostname == sender {
-		clnt.SaveHostTimestamp()
-	}
-	switch pckt.GetType() {
+	sender := dirpckt.Packet.GetSender()
+	clnt.RefreshExpiry()
+	switch dirpckt.Packet.GetType() {
 	case comms.Packet_SERVER_PING:
-		clnt.HandlePing(sender, proto.Size(&pckt))
+		clnt.HandlePing(sender, proto.Size(&dirpckt.Packet))
 	case comms.Packet_SERVER_HANDSHAKE:
-		clnt.HandleHandshake(sender, pckt.GetKey(), pckt.GetHandshakeSuccess())
+		clnt.HandleHandshake(sender, dirpckt.Packet.GetHandshakeSuccess(), dirpckt.Packet.GetHandshakeKey(), dirpckt.Packet.GetHandshakeSession())
 	case comms.Packet_SERVER_OUTPUT:
-		clnt.HandleOutput(sender, pckt.GetPayload(), pckt.GetNonce())
+		clnt.HandleOutput(sender, dirpckt.Packet.GetPayload(), dirpckt.Packet.GetNonce())
 	case comms.Packet_SERVER_EXIT:
 		clnt.HandleExit(nil, false)
 	default:
@@ -194,28 +177,40 @@ func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
 func (clnt *Client) Connect() {
 	if !clnt.Proxy.IsListening("server", clnt.RemoteHostname) {
 		clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
+		return
 	}
-	ws := clnt.TerminalSize()
+	// Send handshake request to the server
+	ws, err := util.TerminalSize()
+	if err != nil {
+		clnt.HandleExit(err, false)
+		return
+	}
 	clnt.Proxy.SendPacket(proxy.DirectedPacket{
 		Category:  "server",
 		Recipient: clnt.RemoteHostname,
 		Packet: comms.Packet{
 			Type:          comms.Packet_CLIENT_HANDSHAKE,
 			Sender:        clnt.Proxy.Hostname,
+			HandshakeKey:  clnt.PrivateKey.Bytes(),
 			PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
-			Key:           clnt.PrivateKey.Bytes(),
 		},
 	})
+	// Wait until we have received a handshake response from the server
+	// This will put us into our own server session
 	<-clnt.Connected
 	// Capture SIGWINCH signals
 	winchChan := make(chan os.Signal)
 	signal.Notify(winchChan, syscall.SIGWINCH)
 	go (func() {
 		for range winchChan {
-			ws := clnt.TerminalSize()
+			ws, err := util.TerminalSize()
+			if err != nil {
+				clnt.HandleExit(err, true)
+				break
+			}
 			clnt.Proxy.SendPacket(proxy.DirectedPacket{
-				Category:  "server",
-				Recipient: clnt.RemoteHostname,
+				Category:  "server-session",
+				Recipient: clnt.ConnectedSession,
 				Packet: comms.Packet{
 					Type:          comms.Packet_CLIENT_PTY_WINCH,
 					Sender:        clnt.Proxy.Hostname,
@@ -241,8 +236,8 @@ func (clnt *Client) Connect() {
 			}
 			ciphertext := clnt.Cipher.Seal(nil, nonce, buf[:cnt], nil)
 			clnt.Proxy.SendPacket(proxy.DirectedPacket{
-				Category:  "server",
-				Recipient: clnt.RemoteHostname,
+				Category:  "server-session",
+				Recipient: clnt.ConnectedSession,
 				Packet: comms.Packet{
 					Type:    comms.Packet_CLIENT_OUTPUT,
 					Sender:  clnt.Proxy.Hostname,
@@ -265,6 +260,7 @@ func (clnt *Client) Connect() {
 func (clnt *Client) Ping() {
 	if !clnt.Proxy.IsListening("server", clnt.RemoteHostname) {
 		clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
+		return
 	}
 	start := time.Now()
 	pckt := comms.Packet{
@@ -290,6 +286,10 @@ func (clnt *Client) Ping() {
 	}()
 	fmt.Printf("PING %s %d data bytes\n", clnt.RemoteHostname, proto.Size(&pckt))
 	for {
+		if !clnt.Proxy.IsListening("server", clnt.RemoteHostname) {
+			clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
+			break
+		}
 		sentTime := time.Now()
 		clnt.Proxy.SendPacket(proxy.DirectedPacket{
 			Category:  "server",
@@ -319,10 +319,8 @@ func (clnt *Client) Ping() {
 }
 
 func (clnt *Client) StartTimeoutHandler() {
-	// Runs every 30 seconds and performs a check to make sure server
-	// has not timed out (last packet received >10 minutes ago)
 	for {
-		if clnt.HostExpired() {
+		if clnt.IsExpired() {
 			clnt.HandleExit(fmt.Errorf("server timed out"), true)
 			break
 		}
@@ -331,7 +329,6 @@ func (clnt *Client) StartTimeoutHandler() {
 }
 
 func (clnt *Client) Start() {
-	// Connect to Redis and run background routines
 	go clnt.StartTimeoutHandler()
 	clnt.Proxy.Start()
 }

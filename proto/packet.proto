@@ -27,11 +27,12 @@ message Packet {
   string sender = 2; // Unique name of sending machine
   bytes payload = 3; // Used by OUTPUT messages
   bytes nonce = 4; // Used by OUTPUT messages
-  bytes key = 5; // Used by HANDSHAKE messages
+  bytes handshake_key = 5; // Used by HANDSHAKE messages
   
   // Client only fields
   uint64 pty_dimensions = 6;
 
   // Server only fields
   bool handshake_success = 7;
+  string handshake_session = 8;
 }
