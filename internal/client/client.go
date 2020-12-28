@@ -239,6 +239,18 @@ func (clnt *Client) Connect() {
 			})
 		}
 	})()
+    // Put the current tty into raw mode and revert on exit
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		clnt.HandleExit(err, false)
+	}
+	defer term.Restore(int(os.Stdin.Fd()), oldState)
+	// Wait until at least one thread messages the finished channel
+	<-clnt.Finished
+}
+
+func (clnt *Client) Ping() {
+    // TODO: Implement
 }
 
 func (clnt *Client) StartTimeoutHandler() {
@@ -257,16 +269,6 @@ func (clnt *Client) Start() {
 	// Connect to Redis and run background routines
 	go clnt.StartTimeoutHandler()
 	clnt.Proxy.Start()
-	// Connect to the specified server
-	clnt.Connect()
-	// Put the current tty into raw mode and revert on exit
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		clnt.HandleExit(err, false)
-	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
-	// Wait until at least one thread messages the finished channel
-	<-clnt.Finished
 }
 
 func (clnt *Client) Close() {
