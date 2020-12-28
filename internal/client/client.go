@@ -43,7 +43,7 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 	clnt := Client{
 		Logger:              logger,
 		RemoteUser:          user,
-		RemoteHostname:      hostname,
+		RemoteHostname:      "s-" + hostname,
 		LastPacketMutex:     sync.Mutex{},
 		LastPacketTimestamp: time.Now(),
 		ConnectedState:      false,
@@ -55,7 +55,7 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 	if err != nil {
 		return nil, err
 	}
-	clnt.Host, err = host.NewRedisHost("client", name, uri, logger, clnt.HandlePacket)
+	clnt.Host, err = host.NewRedisHost("c-"+name, uri, logger, clnt.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,6 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 	}
 	if ack {
 		clnt.Host.SendPacket(host.DirectedPacket{
-			Category:  "server",
 			Recipient: clnt.RemoteHostname,
 			Packet: comms.Packet{
 				Type:   comms.Packet_CLIENT_EXIT,
@@ -151,7 +150,7 @@ func (clnt *Client) HandlePacket(dirpckt host.DirectedPacket) {
 }
 
 func (clnt *Client) Connect() {
-	if !clnt.Host.IsListening("server", clnt.RemoteHostname) {
+	if !clnt.Host.IsListening(clnt.RemoteHostname) {
 		clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
 		return
 	}
@@ -162,7 +161,6 @@ func (clnt *Client) Connect() {
 		return
 	}
 	clnt.Host.SendPacket(host.DirectedPacket{
-		Category:  "server",
 		Recipient: clnt.RemoteHostname,
 		Packet: comms.Packet{
 			Type:         comms.Packet_CLIENT_HANDSHAKE,
@@ -184,7 +182,6 @@ func (clnt *Client) Connect() {
 				break
 			}
 			clnt.Host.SendPacket(host.DirectedPacket{
-				Category:  "server-session",
 				Recipient: clnt.ConnectedSession,
 				Packet: comms.Packet{
 					Type:          comms.Packet_CLIENT_PTY_WINCH,
@@ -205,7 +202,6 @@ func (clnt *Client) Connect() {
 				break
 			}
 			clnt.Host.SendPacket(host.DirectedPacket{
-				Category:  "server-session",
 				Recipient: clnt.ConnectedSession,
 				Packet: comms.Packet{
 					Type:    comms.Packet_CLIENT_OUTPUT,
@@ -226,7 +222,7 @@ func (clnt *Client) Connect() {
 }
 
 func (clnt *Client) Ping() {
-	if !clnt.Host.IsListening("server", clnt.RemoteHostname) {
+	if !clnt.Host.IsListening(clnt.RemoteHostname) {
 		clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
 		return
 	}
@@ -254,13 +250,12 @@ func (clnt *Client) Ping() {
 	}()
 	fmt.Printf("PING %s %d data bytes\n", clnt.RemoteHostname, proto.Size(&pckt))
 	for {
-		if !clnt.Host.IsListening("server", clnt.RemoteHostname) {
+		if !clnt.Host.IsListening(clnt.RemoteHostname) {
 			clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
 			break
 		}
 		sentTime := time.Now()
 		clnt.Host.SendPacket(host.DirectedPacket{
-			Category:  "server",
 			Recipient: clnt.RemoteHostname,
 			Packet:    pckt,
 		})

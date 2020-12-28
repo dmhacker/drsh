@@ -19,7 +19,7 @@ func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server,
 	serv := Server{
 		Logger: logger,
 	}
-	hst, err := host.NewRedisHost("server", hostname, uri, logger, serv.HandlePacket)
+	hst, err := host.NewRedisHost("s-"+hostname, uri, logger, serv.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,6 @@ func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server,
 func (serv *Server) HandlePing(sender string) {
 	// Send an identical response packet back with public information
 	serv.Host.SendPacket(host.DirectedPacket{
-		Category:  "client",
 		Recipient: sender,
 		Packet: comms.Packet{
 			Type:   comms.Packet_SERVER_PING,
@@ -41,7 +40,6 @@ func (serv *Server) HandlePing(sender string) {
 
 func (serv *Server) HandleHandshake(sender string, key []byte) {
 	resp := host.DirectedPacket{
-		Category:  "client",
 		Recipient: sender,
 		Packet: comms.Packet{
 			Type:   comms.Packet_SERVER_HANDSHAKE,

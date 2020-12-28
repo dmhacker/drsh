@@ -18,7 +18,6 @@ import (
 )
 
 type DirectedPacket struct {
-	Category      string
 	Recipient     string
 	Packet        comms.Packet
 	ShouldEncrypt bool
@@ -27,7 +26,6 @@ type DirectedPacket struct {
 
 type RedisHost struct {
 	Hostname     string
-	Category     string
 	Rdb          *redis.Client
 	Rps          *redis.PubSub
 	Inherited    bool
@@ -48,7 +46,7 @@ type RedisHost struct {
 
 var ctx = context.Background()
 
-func NewRedisHost(category string, hostname string, uri string, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisHost, error) {
+func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisHost, error) {
 	if hostname == "" {
 		return nil, fmt.Errorf("hostname cannot be empty")
 	}
@@ -58,7 +56,6 @@ func NewRedisHost(category string, hostname string, uri string, logger *zap.Suga
 	}
 	host := RedisHost{
 		Hostname:  hostname,
-		Category:  category,
 		Rdb:       redis.NewClient(opt),
 		Inherited: false,
 		Outgoing:  make(chan DirectedPacket, 10),
@@ -73,20 +70,19 @@ func NewRedisHost(category string, hostname string, uri string, logger *zap.Suga
 	if err != nil {
 		return nil, err
 	}
-	if host.IsListening(host.Category, host.Hostname) {
+	if host.IsListening(host.Hostname) {
 		return nil, fmt.Errorf("hostname is in use already on this network")
 	}
-	host.Rps = host.Rdb.Subscribe(ctx, "drsh:"+host.Category+":"+host.Hostname)
+	host.Rps = host.Rdb.Subscribe(ctx, "drsh:"+host.Hostname)
 	return &host, nil
 }
 
-func InheritRedisHost(category string, hostname string, rdb *redis.Client, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisHost, error) {
+func InheritRedisHost(hostname string, rdb *redis.Client, logger *zap.SugaredLogger, handler func(DirectedPacket)) (*RedisHost, error) {
 	if hostname == "" {
 		return nil, fmt.Errorf("hostname cannot be empty")
 	}
 	host := RedisHost{
 		Hostname:  hostname,
-		Category:  category,
 		Rdb:       rdb,
 		Inherited: true,
 		Outgoing:  make(chan DirectedPacket, 10),
@@ -101,10 +97,10 @@ func InheritRedisHost(category string, hostname string, rdb *redis.Client, logge
 	if err != nil {
 		return nil, err
 	}
-	if host.IsListening(host.Category, host.Hostname) {
+	if host.IsListening(host.Hostname) {
 		return nil, fmt.Errorf("hostname is in use already on this network")
 	}
-	host.Rps = host.Rdb.Subscribe(ctx, "drsh:"+host.Category+":"+host.Hostname)
+	host.Rps = host.Rdb.Subscribe(ctx, "drsh:"+host.Hostname)
 	return &host, nil
 }
 
@@ -114,8 +110,8 @@ func (host *RedisHost) IsOpen() bool {
 	return host.OpenState
 }
 
-func (host *RedisHost) IsListening(category string, hostname string) bool {
-	channels, err := host.Rdb.PubSubChannels(ctx, "drsh:"+category+":"+hostname).Result()
+func (host *RedisHost) IsListening(hostname string) bool {
+	channels, err := host.Rdb.PubSubChannels(ctx, "drsh:"+hostname).Result()
 	return err == nil && len(channels) > 0
 }
 
@@ -213,7 +209,6 @@ func (host *RedisHost) WaitUntilReady() {
 				break
 			}
 			host.SendPacket(DirectedPacket{
-				Category:  host.Category,
 				Recipient: host.Hostname,
 				Packet: comms.Packet{
 					Type:   comms.Packet_READY,
@@ -235,7 +230,6 @@ func (host *RedisHost) StartPacketSender() {
 		if dirpckt.ShouldKill {
 			break
 		}
-		channel := "drsh:" + dirpckt.Category + ":" + dirpckt.Recipient
 		raw, err := proto.Marshal(&dirpckt.Packet)
 		if err != nil {
 			host.Logger.Errorf("Failed to marshal packet: %s", err)
@@ -249,7 +243,7 @@ func (host *RedisHost) StartPacketSender() {
 				continue
 			}
 		}
-		err = host.Rdb.Publish(ctx, channel, encrypted).Err()
+		err = host.Rdb.Publish(ctx, "drsh:"+dirpckt.Recipient, encrypted).Err()
 		if err != nil {
 			// If the host is closed, this is likely a normal shutdown event
 			if host.IsOpen() {
@@ -279,13 +273,12 @@ func (host *RedisHost) StartPacketReceiver() {
 			}
 		}
 		components := strings.Split(msg.Channel, ":")
-		if len(components) != 2 && components[0] != "drsh" {
+		if len(components) != 2 || components[0] != "drsh" {
 			host.Logger.Errorf("Failed to validate channel: %s", msg.Channel)
 			continue
 		}
 		dirpckt := DirectedPacket{
-			Category:  components[1],
-			Recipient: components[2],
+			Recipient: components[1],
 			Packet:    comms.Packet{},
 		}
 		err = proto.Unmarshal(raw, &dirpckt.Packet)

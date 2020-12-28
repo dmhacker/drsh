@@ -64,7 +64,7 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte) (*Session, e
 	if err != nil {
 		return nil, err
 	}
-	session.Host, err = host.InheritRedisHost("server-session", name, serv.Host.Rdb, serv.Logger, session.HandlePacket)
+	session.Host, err = host.InheritRedisHost("ss-"+name, serv.Host.Rdb, serv.Logger, session.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,6 @@ func (session *Session) HandleExit(err error, ack bool) {
 	// closed the session on the server's end
 	if ack {
 		session.Host.SendPacket(host.DirectedPacket{
-			Category:  "client",
 			Recipient: session.Client,
 			Packet: comms.Packet{
 				Type:   comms.Packet_SERVER_EXIT,
@@ -167,7 +166,6 @@ func (session *Session) StartOutputHandler() {
 			break
 		}
 		session.Host.SendPacket(host.DirectedPacket{
-			Category:  "client",
 			Recipient: session.Client,
 			Packet: comms.Packet{
 				Type:    comms.Packet_SERVER_OUTPUT,
