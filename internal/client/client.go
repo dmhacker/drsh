@@ -17,12 +17,19 @@ import (
 	"github.com/dmhacker/drsh/internal/comms"
 	"github.com/dmhacker/drsh/internal/proxy"
 	"github.com/dmhacker/drsh/internal/util"
+	"github.com/golang/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/monnand/dhkx"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/term"
 )
+
+type PingResponse struct {
+	Sender   string
+	Size     int
+	Received time.Time
+}
 
 type Client struct {
 	Proxy               *proxy.RedisProxy
@@ -35,6 +42,7 @@ type Client struct {
 	LastPacketMutex     sync.Mutex
 	LastPacketTimestamp time.Time
 	ConnectedState      bool
+	Pinged              chan PingResponse
 	Connected           chan bool
 	Finished            chan bool
 }
@@ -65,6 +73,7 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 		ConnectedState:      false,
 		Connected:           make(chan bool),
 		Finished:            make(chan bool),
+		Pinged:              make(chan PingResponse, 1),
 	}
 	clnt.Proxy, err = proxy.NewRedisProxy("client", base64.RawURLEncoding.EncodeToString(name[:]), uri, logger, clnt.HandlePacket)
 	if err != nil {
@@ -97,8 +106,12 @@ func (clnt *Client) HostExpired() bool {
 	return time.Now().Sub(clnt.LastPacketTimestamp).Minutes() >= 10
 }
 
-func (clnt *Client) HandlePing(sender string) {
-	// Ignore ping responses from server for now
+func (clnt *Client) HandlePing(sender string, size int) {
+	clnt.Pinged <- PingResponse{
+		Sender:   sender,
+		Size:     size,
+		Received: time.Now(),
+	}
 }
 
 func (clnt *Client) HandleHandshake(sender string, key []byte, success bool) {
@@ -166,7 +179,7 @@ func (clnt *Client) HandlePacket(dirpckt proxy.DirectedPacket) {
 	}
 	switch pckt.GetType() {
 	case comms.Packet_SERVER_PING:
-		clnt.HandlePing(sender)
+		clnt.HandlePing(sender, proto.Size(&pckt))
 	case comms.Packet_SERVER_HANDSHAKE:
 		clnt.HandleHandshake(sender, pckt.GetKey(), pckt.GetHandshakeSuccess())
 	case comms.Packet_SERVER_OUTPUT:
@@ -239,7 +252,7 @@ func (clnt *Client) Connect() {
 			})
 		}
 	})()
-    // Put the current tty into raw mode and revert on exit
+	// Put the current tty into raw mode and revert on exit
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		clnt.HandleExit(err, false)
@@ -250,7 +263,28 @@ func (clnt *Client) Connect() {
 }
 
 func (clnt *Client) Ping() {
-    // TODO: Implement
+	pckt := comms.Packet{
+		Type:   comms.Packet_CLIENT_PING,
+		Sender: clnt.Proxy.Hostname,
+	}
+	fmt.Printf("PING %s %d data bytes\n", clnt.RemoteHostname, proto.Size(&pckt))
+	for {
+		sent := time.Now()
+		clnt.Proxy.SendPacket(proxy.DirectedPacket{
+			Category:  "server",
+			Recipient: clnt.RemoteHostname,
+			Packet:    pckt,
+		})
+		var resp PingResponse
+		for {
+			resp = <-clnt.Pinged
+			if resp.Sender == clnt.RemoteHostname {
+				break
+			}
+		}
+		fmt.Printf("%d bytes from %s: time=%s\n", resp.Size, clnt.RemoteHostname, resp.Received.Sub(sent))
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func (clnt *Client) StartTimeoutHandler() {
