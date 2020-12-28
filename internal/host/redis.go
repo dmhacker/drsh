@@ -251,7 +251,10 @@ func (host *RedisHost) StartPacketSender() {
 		}
 		err = host.Rdb.Publish(ctx, channel, encrypted).Err()
 		if err != nil {
-			host.Logger.Errorf("Failed to publish packet: %s", err)
+			// If the host is closed, this is likely a normal shutdown event
+			if host.IsOpen() {
+				host.Logger.Errorf("Failed to publish packet: %s", err)
+			}
 			break
 		}
 	}
@@ -261,7 +264,10 @@ func (host *RedisHost) StartPacketReceiver() {
 	for {
 		msg, err := host.Rps.ReceiveMessage(ctx)
 		if err != nil {
-			host.Logger.Errorf("Failed to receive packet: %s", err)
+			// If the host is closed, this is likely a normal shutdown event
+			if host.IsOpen() {
+				host.Logger.Errorf("Failed to receive packet: %s", err)
+			}
 			break
 		}
 		raw := []byte(msg.Payload)
