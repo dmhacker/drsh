@@ -141,7 +141,7 @@ func (clnt *Client) HandlePacket(pckt comms.Packet) {
 	case comms.Packet_SERVER_EXIT:
 		clnt.HandleExit(nil, false)
 	default:
-		clnt.Logger.Errorf("Received invalid packet from '%s'.", pckt.GetSender())
+		clnt.Logger.Warnf("Received invalid packet from '%s'.", pckt.GetSender())
 	}
 }
 

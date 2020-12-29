@@ -41,7 +41,7 @@ func (serv *Server) HandleHandshake(sender string, key []byte, username string) 
 	}
 	session, err := NewSessionFromHandshake(serv, sender, key, username)
 	if err != nil {
-		serv.Logger.Errorf("Failed to setup session with '%s': %s", sender, err)
+		serv.Logger.Warnf("Failed to setup session with '%s': %s", sender, err)
 		resp.HandshakeSuccess = false
 		serv.Host.SendPacket(sender, resp)
 	} else {
@@ -63,7 +63,7 @@ func (serv *Server) HandlePacket(pckt comms.Packet) {
 	case comms.Packet_CLIENT_HANDSHAKE:
 		serv.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeKey(), pckt.GetHandshakeUser())
 	default:
-		serv.Logger.Errorf("Received invalid packet from '%s'.", pckt.GetSender())
+		serv.Logger.Warnf("Received invalid packet from '%s'.", pckt.GetSender())
 	}
 }
 

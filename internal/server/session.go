@@ -144,7 +144,7 @@ func (session *Session) HandleExit(err error, ack bool) {
 
 func (session *Session) HandlePacket(pckt comms.Packet) {
 	if pckt.GetSender() != session.Client {
-		session.Logger.Errorf("Invalid participant '%s' in session %s.", pckt.GetSender(), session.Host.Hostname)
+		session.Logger.Warnf("Invalid participant '%s' in session %s.", pckt.GetSender(), session.Host.Hostname)
 		return
 	}
 	session.RefreshExpiry()
@@ -157,7 +157,7 @@ func (session *Session) HandlePacket(pckt comms.Packet) {
 	case comms.Packet_CLIENT_EXIT:
 		session.HandleExit(nil, false)
 	default:
-		session.Logger.Errorf("Received invalid packet from '%s'.", pckt.GetSender())
+		session.Logger.Warnf("Received invalid packet from '%s'.", pckt.GetSender())
 	}
 }
 

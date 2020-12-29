@@ -232,14 +232,14 @@ func (host *RedisHost) StartPacketSender() {
 		}
 		raw, err := proto.Marshal(&opckt.Packet)
 		if err != nil {
-			host.Logger.Errorf("Failed to marshal packet: %s", err)
+			host.Logger.Warnf("Failed to marshal packet: %s", err)
 			continue
 		}
 		encrypted := raw
 		if opckt.ShouldEncrypt {
 			encrypted, err = host.EncryptPacket(raw)
 			if err != nil {
-				host.Logger.Errorf("Failed to encrypt packet: %s", err)
+				host.Logger.Warnf("Failed to encrypt packet: %s", err)
 				continue
 			}
 		}
@@ -247,7 +247,7 @@ func (host *RedisHost) StartPacketSender() {
 		if err != nil {
 			// If the host is closed, this is likely a normal shutdown event
 			if host.IsOpen() {
-				host.Logger.Errorf("Failed to publish packet: %s", err)
+				host.Logger.Warnf("Failed to publish packet: %s", err)
 				continue
 			} else {
 				break
@@ -262,7 +262,7 @@ func (host *RedisHost) StartPacketReceiver() {
 		if err != nil {
 			// If the host is closed, this is likely a normal shutdown event
 			if host.IsOpen() {
-				host.Logger.Errorf("Failed to receive packet: %s", err)
+				host.Logger.Warnf("Failed to receive packet: %s", err)
 				continue
 			} else {
 				break
@@ -272,14 +272,14 @@ func (host *RedisHost) StartPacketReceiver() {
 		if host.IsEncryptionEnabled() {
 			raw, err = host.DecryptPacket(raw)
 			if err != nil {
-				host.Logger.Errorf("Failed to decrypt packet: %s", err)
+				host.Logger.Warnf("Failed to decrypt packet: %s", err)
 				continue
 			}
 		}
 		pckt := comms.Packet{}
 		err = proto.Unmarshal(raw, &pckt)
 		if err != nil {
-			host.Logger.Errorf("Failed to unmarshal packet: %s", err)
+			host.Logger.Warnf("Failed to unmarshal packet: %s", err)
 			continue
 		}
 		sender := pckt.GetSender()
