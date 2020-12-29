@@ -34,12 +34,12 @@ func (serv *Server) HandlePing(sender string) {
 	})
 }
 
-func (serv *Server) HandleHandshake(sender string, key []byte) {
+func (serv *Server) HandleHandshake(sender string, key []byte, username string) {
 	resp := comms.Packet{
 		Type:   comms.Packet_SERVER_HANDSHAKE,
 		Sender: serv.Host.Hostname,
 	}
-	session, err := NewSessionFromHandshake(serv, sender, key)
+	session, err := NewSessionFromHandshake(serv, sender, key, username)
 	if err != nil {
 		serv.Logger.Errorf("Failed to setup session with '%s': %s", sender, err)
 		resp.HandshakeSuccess = false
@@ -61,7 +61,7 @@ func (serv *Server) HandlePacket(pckt comms.Packet) {
 	case comms.Packet_CLIENT_PING:
 		serv.HandlePing(pckt.GetSender())
 	case comms.Packet_CLIENT_HANDSHAKE:
-		serv.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeKey())
+		serv.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeKey(), pckt.GetHandshakeUser())
 	default:
 		serv.Logger.Errorf("Received invalid packet from '%s'.", pckt.GetSender())
 	}

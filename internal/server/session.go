@@ -27,24 +27,37 @@ type Session struct {
 	LastPacketTimestamp time.Time
 }
 
-func NewSessionFromHandshake(serv *Server, clnt string, key []byte) (*Session, error) {
-	// Set up interactive pseudoterminal
-	// TODO: Client will decide which user is run in the future
-	usr, err := user.Current()
+func GetShellCommand(username string) (*exec.Cmd, error) {
+	usr, err := user.Lookup(username)
 	if err != nil {
 		return nil, err
 	}
-	uid, err := strconv.Atoi(usr.Uid)
+	uid64, err := strconv.ParseUint(usr.Uid, 10, 32)
 	if err != nil {
 		return nil, err
+	}
+	uid := int(uid64)
+	if uid == 0 {
+		// TODO: This can become a config option in the future
+		return nil, fmt.Errorf("logins as root are prohibited")
 	}
 	cache, err := etcpwdparse.NewLoadedEtcPasswdCache()
 	if err != nil {
 		return nil, err
 	}
-	entry, _ := cache.LookupUserByUid(uid)
+	entry, _ := cache.LookupUserByUid(int(uid))
 	shell := entry.Shell()
-	cmd := exec.Command(shell)
+	// There are issues with setuid, setreuid in Golang ...
+	// For now, use sudo to replicate this functionality
+	return exec.Command("sudo", "-u", username, shell), nil
+}
+
+func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username string) (*Session, error) {
+	// Initialize pseudoterminal
+	cmd, err := GetShellCommand(username)
+	if err != nil {
+		return nil, err
+	}
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		return nil, err

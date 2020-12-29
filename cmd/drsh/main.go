@@ -52,7 +52,7 @@ Connection strings are either provided as an alias in the config or in raw forma
 
 func RunServe(cmd *cobra.Command, args []string) {
 	// Initialize the logger
-	logger, err := zap.NewProduction()
+	logger, err := zap.NewDevelopment()
 	if err != nil {
 		er(err)
 	}
@@ -78,7 +78,7 @@ func RunServe(cmd *cobra.Command, args []string) {
 
 func RunClient(cmd *cobra.Command, args []string) *client.Client {
 	// Initialize the logger
-	logger, err := zap.NewProduction()
+	logger, err := zap.NewDevelopment()
 	if err != nil {
 		er(err)
 	}

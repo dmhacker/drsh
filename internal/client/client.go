@@ -157,9 +157,10 @@ func (clnt *Client) Connect() {
 		return
 	}
 	clnt.Host.SendPacket(clnt.RemoteHostname, comms.Packet{
-		Type:         comms.Packet_CLIENT_HANDSHAKE,
-		Sender:       clnt.Host.Hostname,
-		HandshakeKey: clnt.Host.KXPrivateKey.Bytes(),
+		Type:          comms.Packet_CLIENT_HANDSHAKE,
+		Sender:        clnt.Host.Hostname,
+		HandshakeKey:  clnt.Host.KXPrivateKey.Bytes(),
+		HandshakeUser: clnt.RemoteUser,
 	})
 	// Wait until we have received a handshake response from the server
 	// This will put us into our own server session

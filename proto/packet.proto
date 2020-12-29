@@ -36,6 +36,7 @@ message Packet {
   bytes handshake_key = 5;
   bool handshake_success = 7;
   string handshake_session = 8;
+  string handshake_user = 9;
 }
 
 message EncryptedPacket {
