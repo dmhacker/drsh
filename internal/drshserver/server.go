@@ -1,15 +1,15 @@
-package server
+package drshserver
 
 import (
 	"context"
 
-	"github.com/dmhacker/drsh/internal/comms"
-	"github.com/dmhacker/drsh/internal/host"
+	"github.com/dmhacker/drsh/internal/drshcomms"
+	"github.com/dmhacker/drsh/internal/drshhost"
 	"go.uber.org/zap"
 )
 
 type Server struct {
-	Host   *host.RedisHost
+	Host   *drshhost.RedisHost
 	Logger *zap.SugaredLogger
 }
 
@@ -19,7 +19,7 @@ func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server,
 	serv := Server{
 		Logger: logger,
 	}
-	hst, err := host.NewRedisHost("se-"+hostname, uri, logger, serv.HandlePacket)
+	hst, err := drshhost.NewRedisHost("se-"+hostname, uri, logger, serv.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -28,15 +28,15 @@ func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server,
 }
 
 func (serv *Server) HandlePing(sender string) {
-	serv.Host.SendPacket(sender, comms.Packet{
-		Type:   comms.Packet_SERVER_PING,
+	serv.Host.SendPacket(sender, drshcomms.Packet{
+		Type:   drshcomms.Packet_SERVER_PING,
 		Sender: serv.Host.Hostname,
 	})
 }
 
 func (serv *Server) HandleHandshake(sender string, key []byte, username string) {
-	resp := comms.Packet{
-		Type:   comms.Packet_SERVER_HANDSHAKE,
+	resp := drshcomms.Packet{
+		Type:   drshcomms.Packet_SERVER_HANDSHAKE,
 		Sender: serv.Host.Hostname,
 	}
 	session, err := NewSessionFromHandshake(serv, sender, key, username)
@@ -56,11 +56,11 @@ func (serv *Server) HandleHandshake(sender string, key []byte, username string) 
 	}
 }
 
-func (serv *Server) HandlePacket(pckt comms.Packet) {
+func (serv *Server) HandlePacket(pckt drshcomms.Packet) {
 	switch pckt.GetType() {
-	case comms.Packet_CLIENT_PING:
+	case drshcomms.Packet_CLIENT_PING:
 		serv.HandlePing(pckt.GetSender())
-	case comms.Packet_CLIENT_HANDSHAKE:
+	case drshcomms.Packet_CLIENT_HANDSHAKE:
 		serv.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeKey(), pckt.GetHandshakeUser())
 	default:
 		serv.Logger.Warnf("Received invalid packet from '%s'.", pckt.GetSender())

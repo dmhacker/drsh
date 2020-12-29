@@ -1,4 +1,4 @@
-package server
+package drshserver
 
 import (
 	"fmt"
@@ -11,14 +11,14 @@ import (
 
 	"github.com/astromechza/etcpwdparse"
 	"github.com/creack/pty"
-	"github.com/dmhacker/drsh/internal/comms"
-	"github.com/dmhacker/drsh/internal/host"
-	"github.com/dmhacker/drsh/internal/util"
+	"github.com/dmhacker/drsh/internal/drshcomms"
+	"github.com/dmhacker/drsh/internal/drshhost"
+	"github.com/dmhacker/drsh/internal/drshutil"
 	"go.uber.org/zap"
 )
 
 type Session struct {
-	Host                *host.RedisHost
+	Host                *drshhost.RedisHost
 	Pty                 *os.File
 	Logger              *zap.SugaredLogger
 	Client              string
@@ -73,11 +73,11 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 	}
 
 	// Set up session properties & Redis connection
-	name, err := util.RandomName()
+	name, err := drshutil.RandomName()
 	if err != nil {
 		return nil, err
 	}
-	session.Host, err = host.InheritRedisHost("ss-"+name, serv.Host.Rdb, serv.Logger, session.HandlePacket)
+	session.Host, err = drshhost.InheritRedisHost("ss-"+name, serv.Host.Rdb, serv.Logger, session.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -134,27 +134,27 @@ func (session *Session) HandleExit(err error, ack bool) {
 		session.Logger.Infof("'%s' has left session %s.", session.Client, session.Host.Hostname)
 	}
 	if ack {
-		session.Host.SendPacket(session.Client, comms.Packet{
-			Type:   comms.Packet_SERVER_EXIT,
+		session.Host.SendPacket(session.Client, drshcomms.Packet{
+			Type:   drshcomms.Packet_SERVER_EXIT,
 			Sender: session.Host.Hostname,
 		})
 	}
 	session.Close()
 }
 
-func (session *Session) HandlePacket(pckt comms.Packet) {
+func (session *Session) HandlePacket(pckt drshcomms.Packet) {
 	if pckt.GetSender() != session.Client {
 		session.Logger.Warnf("Invalid participant '%s' in session %s.", pckt.GetSender(), session.Host.Hostname)
 		return
 	}
 	session.RefreshExpiry()
 	switch pckt.GetType() {
-	case comms.Packet_CLIENT_OUTPUT:
+	case drshcomms.Packet_CLIENT_OUTPUT:
 		session.HandleOutput(pckt.GetPayload())
-	case comms.Packet_CLIENT_PTY_WINCH:
-		dims := util.Unpack64(pckt.GetPtyDimensions())
+	case drshcomms.Packet_CLIENT_PTY_WINCH:
+		dims := drshutil.Unpack64(pckt.GetPtyDimensions())
 		session.HandlePty(dims[0], dims[1], dims[2], dims[3])
-	case comms.Packet_CLIENT_EXIT:
+	case drshcomms.Packet_CLIENT_EXIT:
 		session.HandleExit(nil, false)
 	default:
 		session.Logger.Warnf("Received invalid packet from '%s'.", pckt.GetSender())
@@ -172,8 +172,8 @@ func (session *Session) StartOutputHandler() {
 			session.HandleExit(err, true)
 			break
 		}
-		session.Host.SendPacket(session.Client, comms.Packet{
-			Type:    comms.Packet_SERVER_OUTPUT,
+		session.Host.SendPacket(session.Client, drshcomms.Packet{
+			Type:    drshcomms.Packet_SERVER_OUTPUT,
 			Sender:  session.Host.Hostname,
 			Payload: buf[:cnt],
 		})

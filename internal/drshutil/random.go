@@ -1,4 +1,4 @@
-package util
+package drshutil
 
 import (
 	"encoding/base64"
@@ -7,8 +7,8 @@ import (
 
 func RandomName() (string, error) {
 	name, err := uuid.NewRandom()
-    if err != nil {
-        return "", err
-    }
+	if err != nil {
+		return "", err
+	}
 	return base64.RawURLEncoding.EncodeToString(name[:]), nil
 }

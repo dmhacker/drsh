@@ -1,4 +1,4 @@
-package client
+package drshclient
 
 import (
 	"context"
@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dmhacker/drsh/internal/comms"
-	"github.com/dmhacker/drsh/internal/host"
-	"github.com/dmhacker/drsh/internal/util"
+	"github.com/dmhacker/drsh/internal/drshcomms"
+	"github.com/dmhacker/drsh/internal/drshhost"
+	"github.com/dmhacker/drsh/internal/drshutil"
 	"github.com/golang/protobuf/proto"
 	"go.uber.org/zap"
 	"golang.org/x/term"
@@ -24,7 +24,7 @@ type PingResponse struct {
 }
 
 type Client struct {
-	Host                *host.RedisHost
+	Host                *drshhost.RedisHost
 	Logger              *zap.SugaredLogger
 	RemoteUser          string
 	RemoteHostname      string
@@ -51,11 +51,11 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 		Finished:            make(chan bool, 1),
 		Pinged:              make(chan PingResponse, 1),
 	}
-	name, err := util.RandomName()
+	name, err := drshutil.RandomName()
 	if err != nil {
 		return nil, err
 	}
-	clnt.Host, err = host.NewRedisHost("cl-"+name, uri, logger, clnt.HandlePacket)
+	clnt.Host, err = drshhost.NewRedisHost("cl-"+name, uri, logger, clnt.HandlePacket)
 	if err != nil {
 		return nil, err
 	}
@@ -115,8 +115,8 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	if ack {
-		clnt.Host.SendPacket(clnt.RemoteHostname, comms.Packet{
-			Type:   comms.Packet_CLIENT_EXIT,
+		clnt.Host.SendPacket(clnt.RemoteHostname, drshcomms.Packet{
+			Type:   drshcomms.Packet_CLIENT_EXIT,
 			Sender: clnt.Host.Hostname,
 		})
 		// Add a slight delay so the disconnect packet can send
@@ -129,16 +129,16 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 	}
 }
 
-func (clnt *Client) HandlePacket(pckt comms.Packet) {
+func (clnt *Client) HandlePacket(pckt drshcomms.Packet) {
 	clnt.RefreshExpiry()
 	switch pckt.GetType() {
-	case comms.Packet_SERVER_PING:
+	case drshcomms.Packet_SERVER_PING:
 		clnt.HandlePing(pckt.GetSender(), proto.Size(&pckt))
-	case comms.Packet_SERVER_HANDSHAKE:
+	case drshcomms.Packet_SERVER_HANDSHAKE:
 		clnt.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeSuccess(), pckt.GetHandshakeKey(), pckt.GetHandshakeSession())
-	case comms.Packet_SERVER_OUTPUT:
+	case drshcomms.Packet_SERVER_OUTPUT:
 		clnt.HandleOutput(pckt.GetSender(), pckt.GetPayload())
-	case comms.Packet_SERVER_EXIT:
+	case drshcomms.Packet_SERVER_EXIT:
 		clnt.HandleExit(nil, false)
 	default:
 		clnt.Logger.Warnf("Received invalid packet from '%s'.", pckt.GetSender())
@@ -156,8 +156,8 @@ func (clnt *Client) Connect() {
 		clnt.HandleExit(err, false)
 		return
 	}
-	clnt.Host.SendPacket(clnt.RemoteHostname, comms.Packet{
-		Type:          comms.Packet_CLIENT_HANDSHAKE,
+	clnt.Host.SendPacket(clnt.RemoteHostname, drshcomms.Packet{
+		Type:          drshcomms.Packet_CLIENT_HANDSHAKE,
 		Sender:        clnt.Host.Hostname,
 		HandshakeKey:  clnt.Host.KXPrivateKey.Bytes(),
 		HandshakeUser: clnt.RemoteUser,
@@ -170,15 +170,15 @@ func (clnt *Client) Connect() {
 	signal.Notify(winchChan, syscall.SIGWINCH)
 	go (func() {
 		for range winchChan {
-			ws, err := util.TerminalSize()
+			ws, err := drshutil.TerminalSize()
 			if err != nil {
 				clnt.HandleExit(err, true)
 				break
 			}
-			clnt.Host.SendPacket(clnt.ConnectedSession, comms.Packet{
-				Type:          comms.Packet_CLIENT_PTY_WINCH,
+			clnt.Host.SendPacket(clnt.ConnectedSession, drshcomms.Packet{
+				Type:          drshcomms.Packet_CLIENT_PTY_WINCH,
 				Sender:        clnt.Host.Hostname,
-				PtyDimensions: util.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
+				PtyDimensions: drshutil.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
 			})
 		}
 	})()
@@ -192,8 +192,8 @@ func (clnt *Client) Connect() {
 				clnt.HandleExit(err, true)
 				break
 			}
-			clnt.Host.SendPacket(clnt.ConnectedSession, comms.Packet{
-				Type:    comms.Packet_CLIENT_OUTPUT,
+			clnt.Host.SendPacket(clnt.ConnectedSession, drshcomms.Packet{
+				Type:    drshcomms.Packet_CLIENT_OUTPUT,
 				Sender:  clnt.Host.Hostname,
 				Payload: buf[:cnt],
 			})
@@ -215,8 +215,8 @@ func (clnt *Client) Ping() {
 		return
 	}
 	start := time.Now()
-	pckt := comms.Packet{
-		Type:   comms.Packet_CLIENT_PING,
+	pckt := drshcomms.Packet{
+		Type:   drshcomms.Packet_CLIENT_PING,
 		Sender: clnt.Host.Hostname,
 	}
 	intr := make(chan os.Signal, 1)

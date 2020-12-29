@@ -1,4 +1,4 @@
-package host
+package drshhost
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dmhacker/drsh/internal/comms"
+	"github.com/dmhacker/drsh/internal/drshcomms"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang/protobuf/proto"
 	"github.com/monnand/dhkx"
@@ -18,7 +18,7 @@ import (
 
 type OutgoingPacket struct {
 	Recipient     string
-	Packet        comms.Packet
+	Packet        drshcomms.Packet
 	ShouldEncrypt bool
 	ShouldKill    bool
 }
@@ -30,7 +30,7 @@ type RedisHost struct {
 	Inherited    bool
 	Outgoing     chan OutgoingPacket
 	Logger       *zap.SugaredLogger
-	Handler      func(comms.Packet)
+	Handler      func(drshcomms.Packet)
 	ReadyMtx     sync.Mutex
 	ReadyFlag    bool
 	ReadyCnd     *sync.Cond
@@ -45,7 +45,7 @@ type RedisHost struct {
 
 var ctx = context.Background()
 
-func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger, handler func(comms.Packet)) (*RedisHost, error) {
+func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger, handler func(drshcomms.Packet)) (*RedisHost, error) {
 	if hostname == "" {
 		return nil, fmt.Errorf("hostname cannot be empty")
 	}
@@ -76,7 +76,7 @@ func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger, handle
 	return &host, nil
 }
 
-func InheritRedisHost(hostname string, rdb *redis.Client, logger *zap.SugaredLogger, handler func(comms.Packet)) (*RedisHost, error) {
+func InheritRedisHost(hostname string, rdb *redis.Client, logger *zap.SugaredLogger, handler func(drshcomms.Packet)) (*RedisHost, error) {
 	if hostname == "" {
 		return nil, fmt.Errorf("hostname cannot be empty")
 	}
@@ -114,7 +114,7 @@ func (host *RedisHost) IsListening(hostname string) bool {
 	return err == nil && len(channels) > 0
 }
 
-func (host *RedisHost) SendPacket(recipient string, pckt comms.Packet) {
+func (host *RedisHost) SendPacket(recipient string, pckt drshcomms.Packet) {
 	host.Outgoing <- OutgoingPacket{
 		Recipient:     recipient,
 		Packet:        pckt,
@@ -175,7 +175,7 @@ func (host *RedisHost) EncryptPacket(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	ciphertext := host.KXCipher.Seal(nil, nonce, data, nil)
-	epckt := comms.EncryptedPacket{
+	epckt := drshcomms.EncryptedPacket{
 		Ciphertext: ciphertext,
 		Nonce:      nonce,
 	}
@@ -187,7 +187,7 @@ func (host *RedisHost) EncryptPacket(data []byte) ([]byte, error) {
 }
 
 func (host *RedisHost) DecryptPacket(data []byte) ([]byte, error) {
-	epckt := comms.EncryptedPacket{}
+	epckt := drshcomms.EncryptedPacket{}
 	err := proto.Unmarshal([]byte(data), &epckt)
 	if err != nil {
 		return nil, err
@@ -211,8 +211,8 @@ func (host *RedisHost) WaitUntilReady() {
 			if ready {
 				break
 			}
-			host.SendPacket(host.Hostname, comms.Packet{
-				Type:   comms.Packet_READY,
+			host.SendPacket(host.Hostname, drshcomms.Packet{
+				Type:   drshcomms.Packet_READY,
 				Sender: host.Hostname,
 			})
 			time.Sleep(500 * time.Millisecond)
@@ -276,14 +276,14 @@ func (host *RedisHost) StartPacketReceiver() {
 				continue
 			}
 		}
-		pckt := comms.Packet{}
+		pckt := drshcomms.Packet{}
 		err = proto.Unmarshal(raw, &pckt)
 		if err != nil {
 			host.Logger.Warnf("Failed to unmarshal packet: %s", err)
 			continue
 		}
 		sender := pckt.GetSender()
-		if pckt.GetType() == comms.Packet_READY && sender == host.Hostname {
+		if pckt.GetType() == drshcomms.Packet_READY && sender == host.Hostname {
 			host.ReadyMtx.Lock()
 			host.ReadyFlag = true
 			host.ReadyCnd.Signal()

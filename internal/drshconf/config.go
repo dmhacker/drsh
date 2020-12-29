@@ -1,4 +1,4 @@
-package config
+package drshconf
 
 import (
 	"os"

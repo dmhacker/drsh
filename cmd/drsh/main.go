@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dmhacker/drsh/internal/client"
-	"github.com/dmhacker/drsh/internal/config"
-	"github.com/dmhacker/drsh/internal/server"
+	"github.com/dmhacker/drsh/internal/drshclient"
+	"github.com/dmhacker/drsh/internal/drshconf"
+	"github.com/dmhacker/drsh/internal/drshserver"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -60,13 +60,13 @@ func RunServe(cmd *cobra.Command, args []string) {
 	sugar := logger.Sugar()
 
 	// Read the config file
-	cfg := config.Config{}
-	if err := config.ReadConfig(cfgFilename, &cfg); err != nil {
+	cfg := drshconf.Config{}
+	if err := drshconf.ReadConfig(cfgFilename, &cfg); err != nil {
 		er(err)
 	}
 
 	// Start the server
-	serv, err := server.NewServer(cfg.Server.Hostname, cfg.Server.RedisUri, sugar)
+	serv, err := drshserver.NewServer(cfg.Server.Hostname, cfg.Server.RedisUri, sugar)
 	if err != nil {
 		er(err)
 	}
@@ -76,7 +76,7 @@ func RunServe(cmd *cobra.Command, args []string) {
 	<-make(chan bool)
 }
 
-func GetClient(cmd *cobra.Command, args []string) *client.Client {
+func GetClient(cmd *cobra.Command, args []string) *drshclient.Client {
 	// Initialize the logger
 	logger, err := zap.NewDevelopment()
 	if err != nil {
@@ -86,14 +86,14 @@ func GetClient(cmd *cobra.Command, args []string) *client.Client {
 	sugar := logger.Sugar()
 
 	// Read in config file and fetch aliases
-	cfg := config.Config{}
-	if err := config.ReadConfig(cfgFilename, &cfg); err != nil {
+	cfg := drshconf.Config{}
+	if err := drshconf.ReadConfig(cfgFilename, &cfg); err != nil {
 		er(err)
 	}
 
 	// Try to resolve alias
 	command := os.Args[2]
-	var selection config.AliasEntry
+	var selection drshconf.AliasEntry
 	var selected bool = false
 	for _, entry := range cfg.Client.Aliases {
 		if command == entry.Alias {
@@ -109,7 +109,7 @@ func GetClient(cmd *cobra.Command, args []string) *client.Client {
 		if len(components) < 3 {
 			er(fmt.Errorf("command should either be an alias or in the format USER@HOST@URI"))
 		}
-		selection = config.AliasEntry{
+		selection = drshconf.AliasEntry{
 			User:     components[0],
 			Hostname: components[1],
 			RedisUri: strings.Join(components[2:], "@"),
@@ -117,7 +117,7 @@ func GetClient(cmd *cobra.Command, args []string) *client.Client {
 	}
 
 	// Return the client
-	clnt, err := client.NewClient(selection.User, selection.Hostname, selection.RedisUri, sugar)
+	clnt, err := drshclient.NewClient(selection.User, selection.Hostname, selection.RedisUri, sugar)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -145,7 +145,7 @@ func er(err error) {
 }
 
 func main() {
-	defCfgFilename, err := config.DefaultConfigFilename()
+	defCfgFilename, err := drshconf.DefaultConfigFilename()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
