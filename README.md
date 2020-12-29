@@ -6,19 +6,17 @@ I needed for some servers.
 
 Normally, a client establishes a SSH connection with a server by opening a 
 secure connection to the port that the server's SSH daemon is listening on, 
-usually port 22. If the server is behind a network firewall, then the firewall
-has to have at least 1 port open in order to allow SSH traffic to arrive from
-an external client. This could be dangerous, especially if the
-port is re-assigned to another application later. SSH tunnelling doesn't
-necessarily fix the issue either, as even the jump server inside the network
-would have to maintain an open port to itself.
+usually port 22. If the server is behind a firewall, then the firewall
+has to have this port open in order to allow SSH traffic to arrive from
+an external client. This could be dangerous, especially if the port is later
+re-assigned to another application.
 
 drsh's solution to this problem is to have the client and the server both
-route their packets through an intermediate proxy, a Redis instance. This
-eliminates the need for the server to allow inbound connections, because
-it receives packets through a pool of outbound connections to the Redis
-instance. With drsh, the only necessary condition is that the client and 
-server must both be able to connect to a mutually agreed upon Redis node.
+route their packets through an Redis instance. This eliminates the need 
+for the server to allow inbound connections, because it receives messages 
+through an outbound connection to the Redis instance. The only necessary 
+condition is that the client and  server must both be able to connect 
+to a mutually agreed upon Redis node.
 
 ## Setup
 
@@ -29,13 +27,13 @@ TODO: Commands will be provided here when the project is more functional
 There are several important reasons why you should not use this in a real 
 world setting:
 * drsh assumes that all clients & servers connecting to one Redis instance are
-mutually trusted. That is, one user won't attempt to interfere with traffic
-sent by another node.
+mutually trusted. That is, if a user joins a Redis instance, they can freely log on
+to any server connected to the same Redis node.
 * drsh tries to implement forward secrecy using the Diffie-Helman key exchange
 and to encrypt messages using the ChaCha20-Poly1305 AEAD cipher. However, I cannot
-objectively guarantee that my implementation is cryptographically secure.
+guarantee that my implementation is cryptographically secure.
 * There are significant performance losses associated with routing packets
-through an intermediary rather than going with a direct route.
+through an intermediary rather than through a direct route.
 
-Hopefully, as the project matures, these concerns will be addressed by
+As the project matures, these concerns will be addressed by
 additional improvements and bug fixes.
