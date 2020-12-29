@@ -76,7 +76,7 @@ func RunServe(cmd *cobra.Command, args []string) {
 	<-make(chan bool)
 }
 
-func RunClient(cmd *cobra.Command, args []string) *client.Client {
+func GetClient(cmd *cobra.Command, args []string) *client.Client {
 	// Initialize the logger
 	logger, err := zap.NewDevelopment()
 	if err != nil {
@@ -106,13 +106,13 @@ func RunClient(cmd *cobra.Command, args []string) *client.Client {
 	// If command matches no alias, then interpret it using raw format
 	if !selected {
 		components := strings.Split(command, "@")
-		if len(components) != 2 {
+		if len(components) < 3 {
 			er(fmt.Errorf("command should either be an alias or in the format USER@HOST@URI"))
 		}
 		selection = config.AliasEntry{
 			User:     components[0],
 			Hostname: components[1],
-			RedisUri: components[2],
+			RedisUri: strings.Join(components[2:], "@"),
 		}
 	}
 
@@ -126,14 +126,14 @@ func RunClient(cmd *cobra.Command, args []string) *client.Client {
 }
 
 func RunConnect(cmd *cobra.Command, args []string) {
-	clnt := RunClient(cmd, args)
+	clnt := GetClient(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
 	clnt.Connect()
 }
 
 func RunPing(cmd *cobra.Command, args []string) {
-	clnt := RunClient(cmd, args)
+	clnt := GetClient(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
 	clnt.Ping()

@@ -3,7 +3,7 @@ server:
   redis_uri: "redis://localhost:6379"
 client:
   aliases:
-    - alias: "root-default"
-      user: "root"
+    - alias: "ubuntu-default"
+      user: "ubuntu"
       hostname: "default"
       redis_uri: "redis://localhost:6379"
