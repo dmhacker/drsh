@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/dmhacker/drsh/internal/drshclient"
 	"github.com/dmhacker/drsh/internal/drshconf"
@@ -72,7 +73,7 @@ func RunServe(cmd *cobra.Command, args []string) {
 	}
 	defer serv.Close()
 	serv.Start()
-	sugar.Infof("Started server '%s'", cfg.Server.Hostname)
+	sugar.Infof("Started server '%s' as uid %d", cfg.Server.Hostname, syscall.Getuid())
 	<-make(chan bool)
 }
 
