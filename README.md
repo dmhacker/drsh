@@ -31,7 +31,7 @@ You can install the example config using the following commands:
 ```
 [[ -z "${XDG_CONFIG_HOME}" ]] && XDG_CONFIG_HOME="${HOME}/.config"
 mkdir -p "${XDG_CONFIG_HOME}/drsh"
-curl -sL -o "${XDG_CONFIG_HOME}/drsh" https://raw.githubusercontent.com/dmhacker/drsh/main/config.yml
+curl -sL -o "${XDG_CONFIG_HOME}/drsh/config.yml" https://raw.githubusercontent.com/dmhacker/drsh/main/config.yml
 ```
 
 The config is structured in two parts, a server section and a client section.
