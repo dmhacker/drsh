@@ -1,9 +1,0 @@
-server:
-  hostname: "default"
-  redis_uri: "redis://localhost:6379"
-client:
-  aliases:
-    - alias: "ubuntu-default"
-      user: "ubuntu"
-      hostname: "default"
-      redis_uri: "redis://localhost:6379"

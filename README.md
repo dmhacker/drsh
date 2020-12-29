@@ -20,49 +20,42 @@ to a mutually agreed upon Redis node.
 
 ## Setup
 
+### Installation
+
+You can install drsh locally using `go get`. 
+Make sure you are using go version 1.14+.
+
+```
+go get -v -u github.com/dmhacker/drsh/cmd/drsh
+```
+
+At this point, you can use the command `drsh`! Try generating a 
+default configuration file by using:
+
+```
+drsh serve
+```
+
 ### Configuration
 
 Both servers and clients on the same machine use only one config located
 at `$XDG_CONFIG_HOME/drsh/config.yml`. For the majority of users, this
 will expand to `$HOME/.config/drsh/config.yml`.
 
-You can install the example config using the following commands:
-
-```
-[[ -z "${XDG_CONFIG_HOME}" ]] && XDG_CONFIG_HOME="${HOME}/.config"
-mkdir -p "${XDG_CONFIG_HOME}/drsh"
-curl -sL -o "${XDG_CONFIG_HOME}/drsh/config.yml" https://raw.githubusercontent.com/dmhacker/drsh/main/config.yml
-```
-
 The config is structured in two parts, a server section and a client section.
 
-* The server section has a Hostname and RedisUri field. The RedisUri specifies
-the Redis node that the server should connect to. The Hostname specifies what
+* The server section has a `hostname` and `redisuri` field. The URI specifies
+the Redis node that the server should connect to. The hostname specifies what
 the machine's unique name in the network is.
-* The client section has an Aliases section, which can optionally consists of
+* The client section has an `aliases` section, which can optionally consists of
 zero or more aliases. An alias represents a username/hostname/uri combination
 in shorthand. Rather than entering the full combination every time a client
 wants to log into a specific server, they can instead just type in the alias.
 This is similar to how aliases work in SSH.
 
-The default config assumes that the server connects to a Redis node hosted
-locally, has the hostname 'default', and can run with the permissions of 
-user 'ubuntu'. In practice, one would probably want to connect to a Redis
-node in the cloud, as that would be a more accessible option.
-
 Please also note that while servers can be run as root and have access to
 logins as root, the practice of logging in as a root as a client is **explicitly
 forbid**. Unlike SSH, there is no option to enable this functionality.
-
-### Installation
-
-You can install drsh locally using `go get`. 
-
-```
-go get -v -u github.com/dmhacker/drsh/cmd/drsh
-```
-
-At this point, you can use the command `drsh`!
 
 ### Servers
 
