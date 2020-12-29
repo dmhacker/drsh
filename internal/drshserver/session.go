@@ -48,8 +48,7 @@ func GetShellCommand(username string) (*exec.Cmd, error) {
 	entry, _ := cache.LookupUserByUid(int(uid))
 	shell := entry.Shell()
 	// There are issues with setuid, setreuid in Golang ...
-	// For now, use su to replicate this functionality
-	return exec.Command("su", "-c", shell, "-", username), nil
+	return exec.Command("sudo", "-u", username, shell), nil
 }
 
 func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username string) (*Session, error) {
