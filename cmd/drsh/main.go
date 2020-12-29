@@ -22,6 +22,14 @@ var (
 rather than setting up a direct connection between server & client, packets are 
 instead routed through a message broker in form of a Redis instance.`,
 	}
+	cfgCmd = &cobra.Command{
+		Use:   "config",
+		Short: "Creates a default config if one does not exist",
+		Long: `If a config file does not exist at the given path,
+it will create a default file. drsh should not be run with the default settings
+but the default config provides a useful starting point.`,
+		Run: RunConfig,
+	}
 	serveCmd = &cobra.Command{
 		Use:   "serve",
 		Short: "Starts the drsh daemon for this machine",
@@ -51,6 +59,14 @@ Connection strings are either provided as an alias in the config or in raw forma
 	}
 )
 
+func RunConfig(cmd *cobra.Command, args []string) {
+	if err := drshconf.WriteDefaultConfig(cfgFilename); err != nil {
+		er(err)
+	}
+	fmt.Printf("The default config has been written to '%s'.\n", cfgFilename)
+	fmt.Printf("Please edit it before running a server or client.\n")
+}
+
 func RunServe(cmd *cobra.Command, args []string) {
 	// Initialize the logger
 	logger, err := zap.NewDevelopment()
@@ -77,7 +93,7 @@ func RunServe(cmd *cobra.Command, args []string) {
 	<-make(chan bool)
 }
 
-func GetClient(cmd *cobra.Command, args []string) *drshclient.Client {
+func NewClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client {
 	// Initialize the logger
 	logger, err := zap.NewDevelopment()
 	if err != nil {
@@ -127,14 +143,14 @@ func GetClient(cmd *cobra.Command, args []string) *drshclient.Client {
 }
 
 func RunConnect(cmd *cobra.Command, args []string) {
-	clnt := GetClient(cmd, args)
+	clnt := NewClientFromCommand(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
 	clnt.Connect()
 }
 
 func RunPing(cmd *cobra.Command, args []string) {
-	clnt := GetClient(cmd, args)
+	clnt := NewClientFromCommand(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
 	clnt.Ping()
@@ -151,10 +167,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	cfgCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
 	serveCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
 	connectCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
 	pingCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
 
+	rootCmd.AddCommand(cfgCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(connectCmd)
 	rootCmd.AddCommand(pingCmd)

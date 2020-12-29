@@ -29,11 +29,11 @@ Make sure you are using go version 1.14+.
 go get -v -u github.com/dmhacker/drsh/cmd/drsh
 ```
 
-At this point, you can use the command `drsh`! Try generating a 
-default configuration file by using:
+At this point, you can use the command `drsh`!
+Try generating a default configuration file using the command:
 
 ```
-drsh serve
+drsh config
 ```
 
 ### Configuration
@@ -88,6 +88,8 @@ server, with the packets passing through Redis.
 ```
 drsh ping {ALIAS|USER@HOST@URI}
 ```
+
+Again, use the `-h` flag for help.
 
 ## Caveats
 

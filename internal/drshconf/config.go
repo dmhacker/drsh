@@ -1,7 +1,6 @@
 package drshconf
 
 import (
-	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -46,7 +45,7 @@ func DefaultConfigFilename() (string, error) {
 	return filepath.Join(configHome, "drsh", "config.yml"), nil
 }
 
-func ReadConfig(filename string, cfg *Config) error {
+func WriteDefaultConfig(filename string) error {
 	currHostname, err := os.Hostname()
 	if err != nil {
 		return err
@@ -65,13 +64,14 @@ func ReadConfig(filename string, cfg *Config) error {
 			RedisUri: "redis://localhost:6379",
 		},
 	})
-	viper.SetConfigFile(filename)
-	if _, err := os.Stat(filename); os.IsNotExist(err) {
-		if err := viper.WriteConfig(); err != nil {
-			return err
-		}
-		return fmt.Errorf("A new config has been generated at '%s'. Please edit it and then rerun this command.", filename)
+	if err := viper.SafeWriteConfigAs(filename); err != nil {
+		return err
 	}
+	return nil
+}
+
+func ReadConfig(filename string, cfg *Config) error {
+	viper.SetConfigFile(filename)
 	viper.AutomaticEnv()
 	if err := viper.ReadInConfig(); err != nil {
 		return err
