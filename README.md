@@ -56,14 +56,20 @@ forbid**. Unlike SSH, there is no option to enable this functionality.
 
 ### Installation
 
-TODO: This will be completed when drsh is able as a package
+You can install drsh locally using `go get`. 
+
+```
+go get -v github.com/dmhacker/drsh/...
+```
+
+At this point, you can use the command `drsh`.
 
 ### Servers
 
 Running the server is simple.
 
 ```
-go get github.com/dmhacker/drsh serve
+drsh serve
 ```
 
 Use the `-h` flag for help.
@@ -73,21 +79,21 @@ Use the `-h` flag for help.
 Connecting to a server is also simple.
 
 ```
-go get github.com/dmhacker/drsh connect {ALIAS|USER@HOST@URI}
+drsh connect {ALIAS|USER@HOST@URI}
 ```
 
 For example, with the default config, the following commands are equivalent.
 
 ```
-go get github.com/dmhacker/drsh connect ubuntu-default
-go get github.com/dmhacker/drsh connect ubuntu@default@redis://localhost:6379
+drsh connect ubuntu-default
+drsh connect ubuntu@default@redis://localhost:6379
 ```
 
 There is also a ping command that measures the latency between a client and
 server, with the packets passing through Redis.
 
 ```
-go get github.com/dmhacker/drsh ping {ALIAS|USER@HOST@URI}
+drsh ping {ALIAS|USER@HOST@URI}
 ```
 
 ## Caveats
