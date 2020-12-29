@@ -36,15 +36,14 @@ curl -sL -o "${XDG_CONFIG_HOME}/drsh" https://raw.githubusercontent.com/dmhacker
 
 The config is structured in two parts, a server section and a client section.
 
-    * The server section has a Hostname and RedisUri field. The RedisUri specifies
-    the Redis node that the server should connect to. The Hostname specifies what
-    the machine's unique name in the network is.
-
-    * The client section has an Aliases section, which can optionally consists of
-    zero or more aliases. An alias represents a username/hostname/uri combination
-    in shorthand. Rather than entering the full combination every time a client
-    wants to log into a specific server, they can instead just type in the alias.
-    This is similar to how aliases work in SSH.
+* The server section has a Hostname and RedisUri field. The RedisUri specifies
+the Redis node that the server should connect to. The Hostname specifies what
+the machine's unique name in the network is.
+* The client section has an Aliases section, which can optionally consists of
+zero or more aliases. An alias represents a username/hostname/uri combination
+in shorthand. Rather than entering the full combination every time a client
+wants to log into a specific server, they can instead just type in the alias.
+This is similar to how aliases work in SSH.
 
 The default config assumes that the server connects to a Redis node hosted
 locally, has the hostname 'default', and can run with the permissions of 
