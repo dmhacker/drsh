@@ -59,10 +59,10 @@ forbid**. Unlike SSH, there is no option to enable this functionality.
 You can install drsh locally using `go get`. 
 
 ```
-go get -v github.com/dmhacker/drsh/...
+go get -v -u github.com/dmhacker/drsh/cmd/drsh
 ```
 
-At this point, you can use the command `drsh`.
+At this point, you can use the command `drsh`!
 
 ### Servers
 
