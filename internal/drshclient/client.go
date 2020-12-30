@@ -219,6 +219,7 @@ func (clnt *Client) Connect() {
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
 	// Wait until at least one thread messages the finished channel
 	<-clnt.Finished
+	fmt.Printf("Connection to %s closed.\n", clnt.RemoteHostname)
 }
 
 func (clnt *Client) Ping() {
