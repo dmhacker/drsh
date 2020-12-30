@@ -2,9 +2,11 @@ package drshserver
 
 import (
 	"context"
+	"strings"
 
 	"github.com/dmhacker/drsh/internal/drshcomms"
 	"github.com/dmhacker/drsh/internal/drshhost"
+	"github.com/dmhacker/drsh/internal/drshutil"
 	"go.uber.org/zap"
 )
 
@@ -49,6 +51,7 @@ func (serv *Server) HandleHandshake(sender string, key []byte, username string) 
 		resp.HandshakeSuccess = true
 		resp.HandshakeKey = session.Host.KXPrivateKey.Bytes()
 		resp.HandshakeSession = session.Host.Hostname
+		resp.HandshakeMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(serv.Host.Hostname, "se-") + ".\n"
 		serv.Host.SendPacket(sender, resp)
 		session.Host.FreePrivateKeys()
 		session.Host.SetEncryptionEnabled(true)

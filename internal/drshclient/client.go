@@ -84,7 +84,7 @@ func (clnt *Client) HandlePing(sender string, size int) {
 	}
 }
 
-func (clnt *Client) HandleHandshake(sender string, success bool, key []byte, session string) {
+func (clnt *Client) HandleHandshake(sender string, success bool, key []byte, session string, motd string) {
 	if !success {
 		clnt.HandleExit(fmt.Errorf("server refused connection"), false)
 		return
@@ -97,6 +97,7 @@ func (clnt *Client) HandleHandshake(sender string, success bool, key []byte, ses
 		}
 		clnt.Host.FreePrivateKeys()
 		clnt.Host.SetEncryptionEnabled(true)
+		fmt.Print(motd)
 		clnt.ConnectedSession = session
 		clnt.ConnectedState = true
 		clnt.Connected <- true
@@ -139,7 +140,7 @@ func (clnt *Client) HandlePacket(pckt drshcomms.Packet) {
 	case drshcomms.Packet_SERVER_HEARTBEAT:
 		// Heartbeats don't require any processing other than timestamping
 	case drshcomms.Packet_SERVER_HANDSHAKE:
-		clnt.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeSuccess(), pckt.GetHandshakeKey(), pckt.GetHandshakeSession())
+		clnt.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeSuccess(), pckt.GetHandshakeKey(), pckt.GetHandshakeSession(), pckt.GetHandshakeMotd())
 	case drshcomms.Packet_SERVER_OUTPUT:
 		clnt.HandleOutput(pckt.GetSender(), pckt.GetPayload())
 	case drshcomms.Packet_SERVER_EXIT:

@@ -39,6 +39,7 @@ message Packet {
   bool handshake_success = 7;
   string handshake_session = 8;
   string handshake_user = 9;
+  string handshake_motd = 10;
 }
 
 message EncryptedPacket {
