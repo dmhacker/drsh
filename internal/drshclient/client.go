@@ -251,7 +251,7 @@ func (clnt *Client) Ping() {
 			os.Exit(0)
 		}
 	}()
-	fmt.Printf("PING %s %d data bytes\n", clnt.RemoteHostname, proto.Size(&pckt))
+	fmt.Printf("PING %s %d data bytes\n", clnt.RawHostname, proto.Size(&pckt))
 	for {
 		if !clnt.Host.IsListening(clnt.RemoteHostname) {
 			clnt.HandleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
