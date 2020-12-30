@@ -103,7 +103,7 @@ func (session *Session) RefreshExpiry() {
 func (session *Session) IsExpired() bool {
 	session.LastPacketMutex.Lock()
 	defer session.LastPacketMutex.Unlock()
-	return time.Now().Sub(session.LastPacketTimestamp).Minutes() >= 10
+	return time.Now().Sub(session.LastPacketTimestamp).Minutes() >= 5
 }
 
 func (session *Session) HandleOutput(payload []byte) {
@@ -111,6 +111,13 @@ func (session *Session) HandleOutput(payload []byte) {
 	if err != nil {
 		session.HandleExit(err, true)
 	}
+}
+
+func (session *Session) HandleHeartbeat() {
+	session.Host.SendPacket(session.Client, drshcomms.Packet{
+		Type:   drshcomms.Packet_SERVER_HEARTBEAT,
+		Sender: session.Host.Hostname,
+	})
 }
 
 func (session *Session) HandlePty(rows uint16, cols uint16, xpixels uint16, ypixels uint16) {
@@ -148,6 +155,8 @@ func (session *Session) HandlePacket(pckt drshcomms.Packet) {
 	}
 	session.RefreshExpiry()
 	switch pckt.GetType() {
+	case drshcomms.Packet_CLIENT_HEARTBEAT:
+		session.HandleHeartbeat()
 	case drshcomms.Packet_CLIENT_OUTPUT:
 		session.HandleOutput(pckt.GetPayload())
 	case drshcomms.Packet_CLIENT_PTY_WINCH:

@@ -71,7 +71,7 @@ func (clnt *Client) RefreshExpiry() {
 func (clnt *Client) IsExpired() bool {
 	clnt.LastPacketMutex.Lock()
 	defer clnt.LastPacketMutex.Unlock()
-	return time.Now().Sub(clnt.LastPacketTimestamp).Minutes() >= 10
+	return time.Now().Sub(clnt.LastPacketTimestamp).Minutes() >= 5
 }
 
 func (clnt *Client) HandlePing(sender string, size int) {
@@ -134,6 +134,8 @@ func (clnt *Client) HandlePacket(pckt drshcomms.Packet) {
 	switch pckt.GetType() {
 	case drshcomms.Packet_SERVER_PING:
 		clnt.HandlePing(pckt.GetSender(), proto.Size(&pckt))
+	case drshcomms.Packet_SERVER_HEARTBEAT:
+		// Heartbeats don't require any processing other than timestamping
 	case drshcomms.Packet_SERVER_HANDSHAKE:
 		clnt.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeSuccess(), pckt.GetHandshakeKey(), pckt.GetHandshakeSession())
 	case drshcomms.Packet_SERVER_OUTPUT:
@@ -197,6 +199,16 @@ func (clnt *Client) Connect() {
 				Sender:  clnt.Host.Hostname,
 				Payload: buf[:cnt],
 			})
+		}
+	})()
+	// Keepalive routine sends packets every so often to keep connection alive
+	go (func() {
+		for {
+			clnt.Host.SendPacket(clnt.ConnectedSession, drshcomms.Packet{
+				Type:   drshcomms.Packet_CLIENT_HEARTBEAT,
+				Sender: clnt.Host.Hostname,
+			})
+			time.Sleep(60 * time.Second)
 		}
 	})()
 	// Put the current tty into raw mode and revert on exit

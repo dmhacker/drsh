@@ -10,16 +10,18 @@ message Packet {
     // The client is responsible for initiating most requests
     // and should usually expect a response from the server
     CLIENT_PING = 1;
-    CLIENT_HANDSHAKE = 2;
-    CLIENT_OUTPUT = 3;
-    CLIENT_PTY_WINCH = 4;
-    CLIENT_EXIT = 5;
+    CLIENT_HEARTBEAT = 2;
+    CLIENT_HANDSHAKE = 3;
+    CLIENT_OUTPUT = 4;
+    CLIENT_PTY_WINCH = 5;
+    CLIENT_EXIT = 6;
     // With the exception of SERVER_OUTPUT, these packets
     // are always a direct response to a client request
-    SERVER_PING = 6;
-    SERVER_HANDSHAKE = 7;
-    SERVER_OUTPUT = 8;
-    SERVER_EXIT = 9;
+    SERVER_PING = 7;
+    SERVER_HEARTBEAT = 8;
+    SERVER_HANDSHAKE = 9;
+    SERVER_OUTPUT = 10;
+    SERVER_EXIT = 11;
   }
 
   // All messages
