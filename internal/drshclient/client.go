@@ -26,6 +26,7 @@ type PingResponse struct {
 type Client struct {
 	Host                *drshhost.RedisHost
 	Logger              *zap.SugaredLogger
+	RawHostname         string
 	RemoteUser          string
 	RemoteHostname      string
 	LastPacketMutex     sync.Mutex
@@ -42,6 +43,7 @@ var ctx = context.Background()
 func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogger) (*Client, error) {
 	clnt := Client{
 		Logger:              logger,
+		RawHostname:         hostname,
 		RemoteUser:          user,
 		RemoteHostname:      "se-" + hostname,
 		LastPacketMutex:     sync.Mutex{},
@@ -149,7 +151,7 @@ func (clnt *Client) HandlePacket(pckt drshcomms.Packet) {
 
 func (clnt *Client) Connect() {
 	if !clnt.Host.IsListening(clnt.RemoteHostname) {
-		clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
+		clnt.HandleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
 		return
 	}
 	// Send handshake request to the server
@@ -219,12 +221,12 @@ func (clnt *Client) Connect() {
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
 	// Wait until at least one thread messages the finished channel
 	<-clnt.Finished
-	fmt.Printf("Connection to %s closed.\n", clnt.RemoteHostname)
+	fmt.Printf("Connection to %s closed.\n", clnt.RawHostname)
 }
 
 func (clnt *Client) Ping() {
 	if !clnt.Host.IsListening(clnt.RemoteHostname) {
-		clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
+		clnt.HandleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
 		return
 	}
 	start := time.Now()
@@ -243,7 +245,7 @@ func (clnt *Client) Ping() {
 		for range intr {
 			loss := (sentCnt - recvCnt) * 100 / sentCnt
 			totalDuration := time.Now().Sub(start)
-			fmt.Printf("\n--- %s ping statistics ---\n", clnt.RemoteHostname)
+			fmt.Printf("\n--- %s ping statistics ---\n", clnt.RawHostname)
 			fmt.Printf("%d packets transmitted, %d received, %d%% packet loss, time %s\n", sentCnt, recvCnt, loss, totalDuration)
 			fmt.Printf("rtt min/max %s/%s\n", minDuration, maxDuration)
 			os.Exit(0)
@@ -252,7 +254,7 @@ func (clnt *Client) Ping() {
 	fmt.Printf("PING %s %d data bytes\n", clnt.RemoteHostname, proto.Size(&pckt))
 	for {
 		if !clnt.Host.IsListening(clnt.RemoteHostname) {
-			clnt.HandleExit(fmt.Errorf("host '%s' does not exist", clnt.RemoteHostname), false)
+			clnt.HandleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
 			break
 		}
 		sentTime := time.Now()
@@ -274,7 +276,7 @@ func (clnt *Client) Ping() {
 			maxDuration = recvDuration
 		}
 		first = false
-		fmt.Printf("%d bytes from %s: time=%s\n", resp.Size, clnt.RemoteHostname, recvDuration)
+		fmt.Printf("%d bytes from %s: time=%s\n", resp.Size, clnt.RawHostname, recvDuration)
 		time.Sleep(1 * time.Second)
 	}
 }
