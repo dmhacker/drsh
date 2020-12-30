@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/monnand/dhkx"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/hkdf"
 )
 
 type OutgoingPacket struct {
@@ -151,12 +154,16 @@ func (host *RedisHost) PrepareKeyExchange() error {
 
 func (host *RedisHost) CompleteKeyExchange(key []byte) error {
 	pub := dhkx.NewPublicKey(key)
-	skey, err := host.KXGroup.ComputeKey(pub, host.KXPrivateKey)
+	secret, err := host.KXGroup.ComputeKey(pub, host.KXPrivateKey)
 	if err != nil {
 		return err
 	}
-	// TODO: Are there issues with only using the first 32 bytes?
-	host.KXCipher, err = chacha20poly1305.New(skey.Bytes()[:chacha20poly1305.KeySize])
+	deriv := hkdf.New(sha256.New, secret.Bytes(), nil, nil)
+	skey := make([]byte, chacha20poly1305.KeySize)
+	if _, err := io.ReadFull(deriv, skey); err != nil {
+		return err
+	}
+	host.KXCipher, err = chacha20poly1305.New(skey)
 	if err != nil {
 		return err
 	}

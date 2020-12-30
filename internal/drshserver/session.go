@@ -38,7 +38,6 @@ func GetShellCommand(username string) (*exec.Cmd, error) {
 	}
 	uid := int(uid64)
 	if uid == 0 {
-		// TODO: This can become a config option in the future
 		return nil, fmt.Errorf("logins as root are prohibited")
 	}
 	cache, err := etcpwdparse.NewLoadedEtcPasswdCache()
