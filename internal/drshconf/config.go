@@ -64,6 +64,9 @@ func WriteDefaultConfig(filename string) error {
 			RedisUri: "redis://localhost:6379",
 		},
 	})
+	if err := os.MkdirAll(filepath.Dir(filename), 0777); err != nil {
+		return err
+	}
 	if err := viper.SafeWriteConfigAs(filename); err != nil {
 		return err
 	}
