@@ -29,8 +29,9 @@ Make sure you are using go version 1.14+.
 go get -v -u github.com/dmhacker/drsh/cmd/drsh
 ```
 
-At this point, you can use the command `drsh`!
-Try generating a default configuration file using the command:
+You can also update drsh using the same command.
+
+Try generating a default configuration file using the following:
 
 ```
 drsh config
