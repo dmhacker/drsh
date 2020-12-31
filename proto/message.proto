@@ -1,0 +1,44 @@
+syntax = "proto3";
+package drshproto;
+
+option go_package = "./internal/drshproto";
+
+message Message {
+  enum MessageType {
+    // Sent to self
+    READY = 0;
+    // Sent to opposing party
+    EXIT = 1;
+    // Server-bound
+    PING_REQUEST = 2;
+    HEARTBEAT_REQUEST = 3;
+    HANDSHAKE_REQUEST = 4;
+    PTY_INPUT = 5;
+    PTY_WINCH = 6;
+    // Client-bound
+    PING_RESPONSE = 7;
+    HEARTBEAT_RESPONSE = 8;
+    HANDSHAKE_RESPONSE = 9;
+    PTY_OUTPUT = 10;
+  }
+
+  // All messages
+  MessageType type = 1;
+  string sender = 2;
+
+  // PTY messages
+  bytes pty_io = 3;
+  uint64 pty_dimensions = 4;
+
+  // Handshake messages
+  bytes handshake_key = 5;
+  bool handshake_success = 7;
+  string handshake_session = 8;
+  string handshake_user = 9;
+  string handshake_motd = 10;
+}
+
+message EncryptedMessage {
+  bytes ciphertext = 1;
+  bytes nonce = 2;
+}
