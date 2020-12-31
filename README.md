@@ -79,8 +79,8 @@ drsh connect {ALIAS|USER@HOST@URI}
 For example, with the default config, the following commands are equivalent.
 
 ```
-drsh connect ubuntu-default
-drsh connect ubuntu@default@redis://localhost:6379
+drsh connect $USER-$HOST
+drsh connect $USER@$HOST@redis://localhost:6379
 ```
 
 There is also a ping command that measures the latency between a client and
