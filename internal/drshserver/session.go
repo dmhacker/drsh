@@ -11,23 +11,23 @@ import (
 
 	"github.com/astromechza/etcpwdparse"
 	"github.com/creack/pty"
-	"github.com/dmhacker/drsh/internal/drshcomms"
 	"github.com/dmhacker/drsh/internal/drshhost"
+	"github.com/dmhacker/drsh/internal/drshproto"
 	"github.com/dmhacker/drsh/internal/drshutil"
 	"go.uber.org/zap"
 )
 
 type Session struct {
-	Host                *drshhost.RedisHost
-	Pty                 *os.File
-	Logger              *zap.SugaredLogger
-	Client              string
-	Resized             bool
-	LastPacketMutex     sync.Mutex
-	LastPacketTimestamp time.Time
+	Host                 *drshhost.RedisHost
+	Pty                  *os.File
+	Logger               *zap.SugaredLogger
+	ClientHostname       string
+	Resized              bool
+	LastMessageMutex     sync.Mutex
+	LastMessageTimestamp time.Time
 }
 
-func GetShellCommand(username string) (*exec.Cmd, error) {
+func userShell(username string) (*exec.Cmd, error) {
 	usr, err := user.Lookup(username)
 	if err != nil {
 		return nil, err
@@ -52,7 +52,7 @@ func GetShellCommand(username string) (*exec.Cmd, error) {
 
 func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username string) (*Session, error) {
 	// Initialize pseudoterminal
-	cmd, err := GetShellCommand(username)
+	cmd, err := userShell(username)
 	if err != nil {
 		return nil, err
 	}
@@ -63,11 +63,11 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 
 	// Initialize session
 	session := Session{
-		Client:              clnt,
-		Pty:                 ptmx,
-		Logger:              serv.Logger,
-		Resized:             false,
-		LastPacketTimestamp: time.Now(),
+		ClientHostname:       clnt,
+		Pty:                  ptmx,
+		Logger:               serv.Logger,
+		Resized:              false,
+		LastMessageTimestamp: time.Now(),
 	}
 
 	// Set up session properties & Redis connection
@@ -75,7 +75,7 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 	if err != nil {
 		return nil, err
 	}
-	session.Host, err = drshhost.InheritRedisHost("ss-"+name, serv.Host.Rdb, serv.Logger, session.HandlePacket)
+	session.Host, err = drshhost.InheritRedisHost("ss-"+name, serv.Host.Rdb, serv.Logger, session.handleMessage)
 	if err != nil {
 		return nil, err
 	}
@@ -93,33 +93,33 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 	return &session, nil
 }
 
-func (session *Session) RefreshExpiry() {
-	session.LastPacketMutex.Lock()
-	defer session.LastPacketMutex.Unlock()
-	session.LastPacketTimestamp = time.Now()
+func (session *Session) refreshExpiry() {
+	session.LastMessageMutex.Lock()
+	defer session.LastMessageMutex.Unlock()
+	session.LastMessageTimestamp = time.Now()
 }
 
-func (session *Session) IsExpired() bool {
-	session.LastPacketMutex.Lock()
-	defer session.LastPacketMutex.Unlock()
-	return time.Now().Sub(session.LastPacketTimestamp).Minutes() >= 5
+func (session *Session) isExpired() bool {
+	session.LastMessageMutex.Lock()
+	defer session.LastMessageMutex.Unlock()
+	return time.Now().Sub(session.LastMessageTimestamp).Minutes() >= 5
 }
 
-func (session *Session) HandleOutput(payload []byte) {
-	_, err := session.Pty.Write(payload)
-	if err != nil {
-		session.HandleExit(err, true)
-	}
-}
-
-func (session *Session) HandleHeartbeat() {
-	session.Host.SendPacket(session.Client, drshcomms.Packet{
-		Type:   drshcomms.Packet_SERVER_HEARTBEAT,
+func (session *Session) handleHeartbeat() {
+	session.Host.SendMessage(session.ClientHostname, drshproto.Message{
+		Type:   drshproto.Message_HEARTBEAT_RESPONSE,
 		Sender: session.Host.Hostname,
 	})
 }
 
-func (session *Session) HandlePty(rows uint16, cols uint16, xpixels uint16, ypixels uint16) {
+func (session *Session) handlePtyInput(payload []byte) {
+	_, err := session.Pty.Write(payload)
+	if err != nil {
+		session.handleExit(err, true)
+	}
+}
+
+func (session *Session) handlePtyWinch(rows uint16, cols uint16, xpixels uint16, ypixels uint16) {
 	pty.Setsize(session.Pty, &pty.Winsize{
 		Rows: rows,
 		Cols: cols,
@@ -127,48 +127,48 @@ func (session *Session) HandlePty(rows uint16, cols uint16, xpixels uint16, ypix
 		Y:    ypixels,
 	})
 	if !session.Resized {
-		go session.StartOutputHandler()
+		go session.startOutputHandler()
 	}
 	session.Resized = true
 }
 
-func (session *Session) HandleExit(err error, ack bool) {
+func (session *Session) handleExit(err error, ack bool) {
 	if err != nil {
-		session.Logger.Infof("'%s' has left session %s: %s.", session.Client, session.Host.Hostname, err.Error())
+		session.Logger.Infof("'%s' has left session %s: %s.", session.ClientHostname, session.Host.Hostname, err.Error())
 	} else {
-		session.Logger.Infof("'%s' has left session %s.", session.Client, session.Host.Hostname)
+		session.Logger.Infof("'%s' has left session %s.", session.ClientHostname, session.Host.Hostname)
 	}
 	if ack {
-		session.Host.SendPacket(session.Client, drshcomms.Packet{
-			Type:   drshcomms.Packet_SERVER_EXIT,
+		session.Host.SendMessage(session.ClientHostname, drshproto.Message{
+			Type:   drshproto.Message_EXIT,
 			Sender: session.Host.Hostname,
 		})
 	}
 	session.Close()
 }
 
-func (session *Session) HandlePacket(pckt drshcomms.Packet) {
-	if pckt.GetSender() != session.Client {
-		session.Logger.Warnf("Invalid participant '%s' in session %s.", pckt.GetSender(), session.Host.Hostname)
+func (session *Session) handleMessage(msg drshproto.Message) {
+	if msg.GetSender() != session.ClientHostname {
+		session.Logger.Warnf("Invalid participant '%s' in session %s.", msg.GetSender(), session.Host.Hostname)
 		return
 	}
-	session.RefreshExpiry()
-	switch pckt.GetType() {
-	case drshcomms.Packet_CLIENT_HEARTBEAT:
-		session.HandleHeartbeat()
-	case drshcomms.Packet_CLIENT_OUTPUT:
-		session.HandleOutput(pckt.GetPayload())
-	case drshcomms.Packet_CLIENT_PTY_WINCH:
-		dims := drshutil.Unpack64(pckt.GetPtyDimensions())
-		session.HandlePty(dims[0], dims[1], dims[2], dims[3])
-	case drshcomms.Packet_CLIENT_EXIT:
-		session.HandleExit(nil, false)
+	session.refreshExpiry()
+	switch msg.GetType() {
+	case drshproto.Message_HEARTBEAT_REQUEST:
+		session.handleHeartbeat()
+	case drshproto.Message_PTY_INPUT:
+		session.handlePtyInput(msg.GetPtyIo())
+	case drshproto.Message_PTY_WINCH:
+		dims := drshutil.Unpack64(msg.GetPtyDimensions())
+		session.handlePtyWinch(dims[0], dims[1], dims[2], dims[3])
+	case drshproto.Message_EXIT:
+		session.handleExit(nil, false)
 	default:
-		session.Logger.Warnf("Received invalid packet from '%s'.", pckt.GetSender())
+		session.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
 	}
 }
 
-func (session *Session) StartOutputHandler() {
+func (session *Session) startOutputHandler() {
 	for {
 		if !session.Host.IsOpen() {
 			break
@@ -176,13 +176,13 @@ func (session *Session) StartOutputHandler() {
 		buf := make([]byte, 4096)
 		cnt, err := session.Pty.Read(buf)
 		if err != nil {
-			session.HandleExit(err, true)
+			session.handleExit(err, true)
 			break
 		}
-		session.Host.SendPacket(session.Client, drshcomms.Packet{
-			Type:    drshcomms.Packet_SERVER_OUTPUT,
-			Sender:  session.Host.Hostname,
-			Payload: buf[:cnt],
+		session.Host.SendMessage(session.ClientHostname, drshproto.Message{
+			Type:   drshproto.Message_PTY_OUTPUT,
+			Sender: session.Host.Hostname,
+			PtyIo:  buf[:cnt],
 		})
 		// This delay is chosen such that output from the pty is able to
 		// buffer, resulting larger packets, more efficient usage of the link,
@@ -192,20 +192,20 @@ func (session *Session) StartOutputHandler() {
 	}
 }
 
-func (session *Session) StartTimeoutHandler() {
+func (session *Session) startTimeoutHandler() {
 	for {
 		if !session.Host.IsOpen() {
 			break
 		}
-		if session.IsExpired() {
-			session.HandleExit(fmt.Errorf("client timed out"), true)
+		if session.isExpired() {
+			session.handleExit(fmt.Errorf("client timed out"), true)
 		}
 		time.Sleep(30 * time.Second)
 	}
 }
 
 func (session *Session) Start() {
-	go session.StartTimeoutHandler()
+	go session.startTimeoutHandler()
 	session.Host.Start()
 }
 

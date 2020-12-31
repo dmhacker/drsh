@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/dmhacker/drsh/internal/drshcomms"
 	"github.com/dmhacker/drsh/internal/drshhost"
+	"github.com/dmhacker/drsh/internal/drshproto"
 	"github.com/dmhacker/drsh/internal/drshutil"
 	"go.uber.org/zap"
 )
@@ -21,7 +21,7 @@ func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server,
 	serv := Server{
 		Logger: logger,
 	}
-	hst, err := drshhost.NewRedisHost("se-"+hostname, uri, logger, serv.HandlePacket)
+	hst, err := drshhost.NewRedisHost("se-"+hostname, uri, logger, serv.handleMessage)
 	if err != nil {
 		return nil, err
 	}
@@ -29,44 +29,44 @@ func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server,
 	return &serv, nil
 }
 
-func (serv *Server) HandlePing(sender string) {
-	serv.Host.SendPacket(sender, drshcomms.Packet{
-		Type:   drshcomms.Packet_SERVER_PING,
+func (serv *Server) handlePing(sender string) {
+	serv.Host.SendMessage(sender, drshproto.Message{
+		Type:   drshproto.Message_PING_RESPONSE,
 		Sender: serv.Host.Hostname,
 	})
 }
 
-func (serv *Server) HandleHandshake(sender string, key []byte, username string) {
-	resp := drshcomms.Packet{
-		Type:   drshcomms.Packet_SERVER_HANDSHAKE,
+func (serv *Server) handleHandshake(sender string, key []byte, username string) {
+	resp := drshproto.Message{
+		Type:   drshproto.Message_HANDSHAKE_RESPONSE,
 		Sender: serv.Host.Hostname,
 	}
 	session, err := NewSessionFromHandshake(serv, sender, key, username)
 	if err != nil {
 		serv.Logger.Warnf("Failed to setup session with '%s': %s", sender, err)
 		resp.HandshakeSuccess = false
-		serv.Host.SendPacket(sender, resp)
+		serv.Host.SendMessage(sender, resp)
 	} else {
 		serv.Logger.Infof("'%s' has joined session %s.", sender, session.Host.Hostname)
 		resp.HandshakeSuccess = true
 		resp.HandshakeKey = session.Host.KXPrivateKey.Bytes()
 		resp.HandshakeSession = session.Host.Hostname
-		resp.HandshakeMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(serv.Host.Hostname, "se-") + ".\n"
-		serv.Host.SendPacket(sender, resp)
+		resp.HandshakeMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(serv.Host.Hostname, "se-") + " via drsh.\n"
+		serv.Host.SendMessage(sender, resp)
 		session.Host.FreePrivateKeys()
 		session.Host.SetEncryptionEnabled(true)
 		session.Start()
 	}
 }
 
-func (serv *Server) HandlePacket(pckt drshcomms.Packet) {
-	switch pckt.GetType() {
-	case drshcomms.Packet_CLIENT_PING:
-		serv.HandlePing(pckt.GetSender())
-	case drshcomms.Packet_CLIENT_HANDSHAKE:
-		serv.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeKey(), pckt.GetHandshakeUser())
+func (serv *Server) handleMessage(msg drshproto.Message) {
+	switch msg.GetType() {
+	case drshproto.Message_PING_REQUEST:
+		serv.handlePing(msg.GetSender())
+	case drshproto.Message_HANDSHAKE_REQUEST:
+		serv.handleHandshake(msg.GetSender(), msg.GetHandshakeKey(), msg.GetHandshakeUser())
 	default:
-		serv.Logger.Warnf("Received invalid packet from '%s'.", pckt.GetSender())
+		serv.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
 	}
 }
 

@@ -25,7 +25,7 @@ type Config struct {
 	} `mapstructure:"client"`
 }
 
-func ConfigHome() (string, error) {
+func DefaultConfigFilename() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -34,11 +34,6 @@ func ConfigHome() (string, error) {
 	if len(configHome) == 0 {
 		configHome = filepath.Join(home, ".config")
 	}
-	return configHome, nil
-}
-
-func DefaultConfigFilename() (string, error) {
-	configHome, err := ConfigHome()
 	if err != nil {
 		return "", err
 	}

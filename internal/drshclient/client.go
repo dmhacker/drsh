@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dmhacker/drsh/internal/drshcomms"
 	"github.com/dmhacker/drsh/internal/drshhost"
+	"github.com/dmhacker/drsh/internal/drshproto"
 	"github.com/dmhacker/drsh/internal/drshutil"
 	"github.com/golang/protobuf/proto"
 	"go.uber.org/zap"
@@ -29,8 +29,8 @@ type Client struct {
 	RawHostname         string
 	RemoteUser          string
 	RemoteHostname      string
-	LastPacketMutex     sync.Mutex
-	LastPacketTimestamp time.Time
+	LastMessageMutex     sync.Mutex
+	LastMessageTimestamp time.Time
 	ConnectedState      bool
 	ConnectedSession    string
 	Pinged              chan PingResponse
@@ -46,8 +46,7 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 		RawHostname:         hostname,
 		RemoteUser:          user,
 		RemoteHostname:      "se-" + hostname,
-		LastPacketMutex:     sync.Mutex{},
-		LastPacketTimestamp: time.Now(),
+		LastMessageTimestamp: time.Now(),
 		ConnectedState:      false,
 		Connected:           make(chan bool, 1),
 		Finished:            make(chan bool, 1),
@@ -57,26 +56,26 @@ func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogg
 	if err != nil {
 		return nil, err
 	}
-	clnt.Host, err = drshhost.NewRedisHost("cl-"+name, uri, logger, clnt.HandlePacket)
+	clnt.Host, err = drshhost.NewRedisHost("cl-"+name, uri, logger, clnt.handleMessage)
 	if err != nil {
 		return nil, err
 	}
 	return &clnt, nil
 }
 
-func (clnt *Client) RefreshExpiry() {
-	clnt.LastPacketMutex.Lock()
-	defer clnt.LastPacketMutex.Unlock()
-	clnt.LastPacketTimestamp = time.Now()
+func (clnt *Client) refreshExpiry() {
+	clnt.LastMessageMutex.Lock()
+	defer clnt.LastMessageMutex.Unlock()
+	clnt.LastMessageTimestamp = time.Now()
 }
 
-func (clnt *Client) IsExpired() bool {
-	clnt.LastPacketMutex.Lock()
-	defer clnt.LastPacketMutex.Unlock()
-	return time.Now().Sub(clnt.LastPacketTimestamp).Minutes() >= 5
+func (clnt *Client) isExpired() bool {
+	clnt.LastMessageMutex.Lock()
+	defer clnt.LastMessageMutex.Unlock()
+	return time.Now().Sub(clnt.LastMessageTimestamp).Minutes() >= 5
 }
 
-func (clnt *Client) HandlePing(sender string, size int) {
+func (clnt *Client) handlePing(sender string, size int) {
 	clnt.Pinged <- PingResponse{
 		Sender:   sender,
 		Size:     size,
@@ -84,15 +83,15 @@ func (clnt *Client) HandlePing(sender string, size int) {
 	}
 }
 
-func (clnt *Client) HandleHandshake(sender string, success bool, key []byte, session string, motd string) {
+func (clnt *Client) handleHandshake(sender string, success bool, key []byte, session string, motd string) {
 	if !success {
-		clnt.HandleExit(fmt.Errorf("server refused connection"), false)
+		clnt.handleExit(fmt.Errorf("server refused connection"), false)
 		return
 	}
 	if !clnt.ConnectedState && sender == clnt.RemoteHostname {
 		err := clnt.Host.CompleteKeyExchange(key)
 		if err != nil {
-			clnt.HandleExit(err, false)
+			clnt.handleExit(err, false)
 			return
 		}
 		clnt.Host.FreePrivateKeys()
@@ -104,22 +103,22 @@ func (clnt *Client) HandleHandshake(sender string, success bool, key []byte, ses
 	}
 }
 
-func (clnt *Client) HandleOutput(sender string, payload []byte) {
+func (clnt *Client) handleOutput(sender string, payload []byte) {
 	if clnt.ConnectedState && sender == clnt.ConnectedSession {
 		_, err := os.Stdout.Write(payload)
 		if err != nil {
-			clnt.HandleExit(err, true)
+			clnt.handleExit(err, true)
 		}
 	}
 }
 
-func (clnt *Client) HandleExit(err error, ack bool) {
+func (clnt *Client) handleExit(err error, ack bool) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	if ack {
-		clnt.Host.SendPacket(clnt.RemoteHostname, drshcomms.Packet{
-			Type:   drshcomms.Packet_CLIENT_EXIT,
+		clnt.Host.SendMessage(clnt.RemoteHostname, drshproto.Message{
+			Type:   drshproto.Message_EXIT,
 			Sender: clnt.Host.Hostname,
 		})
 		// Add a slight delay so the disconnect packet can send
@@ -132,37 +131,37 @@ func (clnt *Client) HandleExit(err error, ack bool) {
 	}
 }
 
-func (clnt *Client) HandlePacket(pckt drshcomms.Packet) {
-	clnt.RefreshExpiry()
-	switch pckt.GetType() {
-	case drshcomms.Packet_SERVER_PING:
-		clnt.HandlePing(pckt.GetSender(), proto.Size(&pckt))
-	case drshcomms.Packet_SERVER_HEARTBEAT:
+func (clnt *Client) handleMessage(msg drshproto.Message) {
+	clnt.refreshExpiry()
+	switch msg.GetType() {
+	case drshproto.Message_PING_RESPONSE:
+		clnt.handlePing(msg.GetSender(), proto.Size(&msg))
+	case drshproto.Message_HEARTBEAT_RESPONSE:
 		// Heartbeats don't require any processing other than timestamping
-	case drshcomms.Packet_SERVER_HANDSHAKE:
-		clnt.HandleHandshake(pckt.GetSender(), pckt.GetHandshakeSuccess(), pckt.GetHandshakeKey(), pckt.GetHandshakeSession(), pckt.GetHandshakeMotd())
-	case drshcomms.Packet_SERVER_OUTPUT:
-		clnt.HandleOutput(pckt.GetSender(), pckt.GetPayload())
-	case drshcomms.Packet_SERVER_EXIT:
-		clnt.HandleExit(nil, false)
+	case drshproto.Message_HANDSHAKE_RESPONSE:
+		clnt.handleHandshake(msg.GetSender(), msg.GetHandshakeSuccess(), msg.GetHandshakeKey(), msg.GetHandshakeSession(), msg.GetHandshakeMotd())
+	case drshproto.Message_PTY_OUTPUT:
+		clnt.handleOutput(msg.GetSender(), msg.GetPtyIo())
+	case drshproto.Message_EXIT:
+		clnt.handleExit(nil, false)
 	default:
-		clnt.Logger.Warnf("Received invalid packet from '%s'.", pckt.GetSender())
+		clnt.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
 	}
 }
 
 func (clnt *Client) Connect() {
 	if !clnt.Host.IsListening(clnt.RemoteHostname) {
-		clnt.HandleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
+		clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
 		return
 	}
 	// Send handshake request to the server
 	err := clnt.Host.PrepareKeyExchange()
 	if err != nil {
-		clnt.HandleExit(err, false)
+		clnt.handleExit(err, false)
 		return
 	}
-	clnt.Host.SendPacket(clnt.RemoteHostname, drshcomms.Packet{
-		Type:          drshcomms.Packet_CLIENT_HANDSHAKE,
+	clnt.Host.SendMessage(clnt.RemoteHostname, drshproto.Message{
+		Type:          drshproto.Message_HANDSHAKE_REQUEST,
 		Sender:        clnt.Host.Hostname,
 		HandshakeKey:  clnt.Host.KXPrivateKey.Bytes(),
 		HandshakeUser: clnt.RemoteUser,
@@ -177,11 +176,11 @@ func (clnt *Client) Connect() {
 		for range winchChan {
 			ws, err := drshutil.TerminalSize()
 			if err != nil {
-				clnt.HandleExit(err, true)
+				clnt.handleExit(err, true)
 				break
 			}
-			clnt.Host.SendPacket(clnt.ConnectedSession, drshcomms.Packet{
-				Type:          drshcomms.Packet_CLIENT_PTY_WINCH,
+			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
+				Type:          drshproto.Message_PTY_WINCH,
 				Sender:        clnt.Host.Hostname,
 				PtyDimensions: drshutil.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
 			})
@@ -194,21 +193,21 @@ func (clnt *Client) Connect() {
 			buf := make([]byte, 1096)
 			cnt, err := os.Stdin.Read(buf)
 			if err != nil {
-				clnt.HandleExit(err, true)
+				clnt.handleExit(err, true)
 				break
 			}
-			clnt.Host.SendPacket(clnt.ConnectedSession, drshcomms.Packet{
-				Type:    drshcomms.Packet_CLIENT_OUTPUT,
-				Sender:  clnt.Host.Hostname,
-				Payload: buf[:cnt],
+			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
+				Type:   drshproto.Message_PTY_INPUT,
+				Sender: clnt.Host.Hostname,
+				PtyIo:  buf[:cnt],
 			})
 		}
 	})()
 	// Keepalive routine sends packets every so often to keep connection alive
 	go (func() {
 		for {
-			clnt.Host.SendPacket(clnt.ConnectedSession, drshcomms.Packet{
-				Type:   drshcomms.Packet_CLIENT_HEARTBEAT,
+			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
+				Type:   drshproto.Message_HEARTBEAT_REQUEST,
 				Sender: clnt.Host.Hostname,
 			})
 			time.Sleep(60 * time.Second)
@@ -217,7 +216,7 @@ func (clnt *Client) Connect() {
 	// Put the current tty into raw mode and revert on exit
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
-		clnt.HandleExit(err, false)
+		clnt.handleExit(err, false)
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
 	// Wait until at least one thread messages the finished channel
@@ -227,12 +226,12 @@ func (clnt *Client) Connect() {
 
 func (clnt *Client) Ping() {
 	if !clnt.Host.IsListening(clnt.RemoteHostname) {
-		clnt.HandleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
+		clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
 		return
 	}
 	start := time.Now()
-	pckt := drshcomms.Packet{
-		Type:   drshcomms.Packet_CLIENT_PING,
+	msg := drshproto.Message{
+		Type:   drshproto.Message_PING_REQUEST,
 		Sender: clnt.Host.Hostname,
 	}
 	intr := make(chan os.Signal, 1)
@@ -252,14 +251,14 @@ func (clnt *Client) Ping() {
 			os.Exit(0)
 		}
 	}()
-	fmt.Printf("PING %s %d data bytes\n", clnt.RawHostname, proto.Size(&pckt))
+	fmt.Printf("PING %s %d data bytes\n", clnt.RawHostname, proto.Size(&msg))
 	for {
 		if !clnt.Host.IsListening(clnt.RemoteHostname) {
-			clnt.HandleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
+			clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
 			break
 		}
 		sentTime := time.Now()
-		clnt.Host.SendPacket(clnt.RemoteHostname, pckt)
+		clnt.Host.SendMessage(clnt.RemoteHostname, msg)
 		sentCnt++
 		var resp PingResponse
 		for {
@@ -282,10 +281,10 @@ func (clnt *Client) Ping() {
 	}
 }
 
-func (clnt *Client) StartTimeoutHandler() {
+func (clnt *Client) startTimeoutHandler() {
 	for {
-		if clnt.IsExpired() {
-			clnt.HandleExit(fmt.Errorf("server timed out"), true)
+		if clnt.isExpired() {
+			clnt.handleExit(fmt.Errorf("server timed out"), true)
 			break
 		}
 		time.Sleep(30 * time.Second)
@@ -293,7 +292,7 @@ func (clnt *Client) StartTimeoutHandler() {
 }
 
 func (clnt *Client) Start() {
-	go clnt.StartTimeoutHandler()
+	go clnt.startTimeoutHandler()
 	clnt.Host.Start()
 }
 

@@ -89,7 +89,7 @@ func RunServe(cmd *cobra.Command, args []string) {
 	}
 	defer serv.Close()
 	serv.Start()
-	sugar.Infof("Started server '%s' as uid %d", cfg.Server.Hostname, syscall.Getuid())
+	sugar.Infof("Started server '%s' with uid %d", cfg.Server.Hostname, syscall.Getuid())
 	<-make(chan bool)
 }
 
