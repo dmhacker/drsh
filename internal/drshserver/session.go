@@ -75,7 +75,7 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 	if err != nil {
 		return nil, err
 	}
-	session.Host, err = drshhost.InheritRedisHost("ss-"+name, serv.Host.Rdb, serv.Logger, session.handleMessage)
+	session.Host, err = drshhost.NewInheritedRedisHost("ss-"+name, serv.Host.Rdb, serv.Logger, session.handleMessage)
 	if err != nil {
 		return nil, err
 	}
