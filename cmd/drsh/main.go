@@ -28,7 +28,7 @@ instead routed through a message broker in form of a Redis instance.`,
 		Long: `If a config file does not exist at the given path,
 it will create a default file. drsh should not be run with the default settings
 but the default config provides a useful starting point.`,
-		Run: RunConfig,
+		Run: runConfig,
 	}
 	serveCmd = &cobra.Command{
 		Use:   "serve",
@@ -37,7 +37,7 @@ but the default config provides a useful starting point.`,
 Redis network. Functions similarily to sshd, only all packets are routed
 through Redis. All clients are assumed to be connecting using an interactive
 session, requiring the use of a pty.`,
-		Run: RunServe,
+		Run: runServe,
 	}
 	connectCmd = &cobra.Command{
 		Use:   "connect [alias|user@host@redis]",
@@ -47,7 +47,7 @@ session, requiring the use of a pty.`,
 hostname and username. Connection strings are either provided as a 
 config-defined alias  or in raw format. The session is assumed to be interactive;
 there is no option to disable the pty at the moment.`,
-		Run: RunConnect,
+		Run: runConnect,
 	}
 	pingCmd = &cobra.Command{
 		Use:   "ping [alias|user@host@redis]",
@@ -55,11 +55,11 @@ there is no option to disable the pty at the moment.`,
 		Short: "Pings a drsh server",
 		Long: `Calculates the RTT from the current machine to the specified server.
 Connection strings are either provided as an alias in the config or in raw format.`,
-		Run: RunPing,
+		Run: runPing,
 	}
 )
 
-func RunConfig(cmd *cobra.Command, args []string) {
+func runConfig(cmd *cobra.Command, args []string) {
 	if err := drshconf.WriteDefaultConfig(cfgFilename); err != nil {
 		er(err)
 	}
@@ -67,7 +67,7 @@ func RunConfig(cmd *cobra.Command, args []string) {
 	fmt.Printf("Please edit it before running a server or client.\n")
 }
 
-func RunServe(cmd *cobra.Command, args []string) {
+func runServe(cmd *cobra.Command, args []string) {
 	// Initialize the logger
 	logger, err := zap.NewDevelopment()
 	if err != nil {
@@ -83,7 +83,7 @@ func RunServe(cmd *cobra.Command, args []string) {
 	}
 
 	// Start the server
-	serv, err := drshserver.NewServer(cfg.Server.Hostname, cfg.Server.RedisUri, sugar)
+	serv, err := drshserver.NewServer(cfg.Server.Hostname, cfg.Server.RedisURI, sugar)
 	if err != nil {
 		er(err)
 	}
@@ -93,7 +93,7 @@ func RunServe(cmd *cobra.Command, args []string) {
 	<-make(chan bool)
 }
 
-func NewClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client {
+func newClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client {
 	// Initialize the logger
 	logger, err := zap.NewDevelopment()
 	if err != nil {
@@ -129,12 +129,12 @@ func NewClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client 
 		selection = drshconf.AliasEntry{
 			User:     components[0],
 			Hostname: components[1],
-			RedisUri: strings.Join(components[2:], "@"),
+			RedisURI: strings.Join(components[2:], "@"),
 		}
 	}
 
 	// Return the client
-	clnt, err := drshclient.NewClient(selection.User, selection.Hostname, selection.RedisUri, sugar)
+	clnt, err := drshclient.NewClient(selection.User, selection.Hostname, selection.RedisURI, sugar)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -142,15 +142,15 @@ func NewClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client 
 	return clnt
 }
 
-func RunConnect(cmd *cobra.Command, args []string) {
-	clnt := NewClientFromCommand(cmd, args)
+func runConnect(cmd *cobra.Command, args []string) {
+	clnt := newClientFromCommand(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
 	clnt.Connect()
 }
 
-func RunPing(cmd *cobra.Command, args []string) {
-	clnt := NewClientFromCommand(cmd, args)
+func runPing(cmd *cobra.Command, args []string) {
+	clnt := newClientFromCommand(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
 	clnt.Ping()

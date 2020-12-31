@@ -10,6 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// Server represents a host on the network that accepts connections & pings from any clients
+// that wish to communicate with it. On a successful handshake with a client, a server will
+// spawn a separate "session" through which all communication is encrypted. Because the session
+// handles most of the connection legwork, the actual server class is fairly light.
 type Server struct {
 	Host   *drshhost.RedisHost
 	Logger *zap.SugaredLogger
@@ -17,6 +21,8 @@ type Server struct {
 
 var ctx = context.Background()
 
+// NewServer creates a new server and its underlying connection to Redis. It is not actively
+// receiving and sending packets at this point; that is only enabled upon start.
 func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server, error) {
 	serv := Server{
 		Logger: logger,
@@ -70,10 +76,12 @@ func (serv *Server) handleMessage(msg drshproto.Message) {
 	}
 }
 
+// Start is a non-blocking function that enables server packet processing.
 func (serv *Server) Start() {
 	serv.Host.Start()
 }
 
+// Close is called to destroy the server's Redis connection and perform cleanup.
 func (serv *Server) Close() {
 	serv.Host.Close()
 }

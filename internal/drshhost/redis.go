@@ -26,6 +26,9 @@ type outgoingMessage struct {
 	ShouldKill    bool
 }
 
+// RedisHost is a wrapper around Redis that only uses Redis as a message broker.
+// It tries to hide the full functionality of Redis by only exposing functions
+// related to sending and receiving drsh messages.
 type RedisHost struct {
 	Hostname     string
 	Rdb          *redis.Client
@@ -48,7 +51,7 @@ type RedisHost struct {
 
 var ctx = context.Background()
 
-// Creates a new Redis host. The host will connect as `hostname` to the Redis
+// NewRedisHost creates a new Redis host. The host will connect as `hostname` to the Redis
 // node at `uri` and will subscribe to the channel "drsh:`hostname`". Although
 // the host is connected, it is not actively processing messages at this point.
 func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger, handler func(drshproto.Message)) (*RedisHost, error) {
@@ -82,7 +85,7 @@ func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger, handle
 	return &host, nil
 }
 
-// This is a niche method that is used by a server session to create a host
+// NewInheritedRedisHost is a niche method that is used by a server session to create a host
 // using the parent server's existing connection. Do not use otherwise.
 func NewInheritedRedisHost(hostname string, rdb *redis.Client, logger *zap.SugaredLogger, handler func(drshproto.Message)) (*RedisHost, error) {
 	if hostname == "" {
@@ -111,37 +114,39 @@ func NewInheritedRedisHost(hostname string, rdb *redis.Client, logger *zap.Sugar
 	return &host, nil
 }
 
-// The host is considered open until Close() is called on it.
+// IsOpen returns whether or not the host is listening on the network.
+// The host is considered open from creation until Close() is called on it.
 func (host *RedisHost) IsOpen() bool {
 	host.OpenMtx.Lock()
 	defer host.OpenMtx.Unlock()
 	return host.OpenState
 }
 
-// Check if a host with this name is listening on the network. A listening host
-// means that the host is subscribed to its channel. It is a necessary but not
-// sufficient condition for host communication, as the other host must be
+// IsListening returns whether or not a host with this name is listening on the network.
+// A listening host means that the host is subscribed to its channel. It is a necessary
+// but not sufficient condition for host communication, as the other host must be
 // responsive too.
 func (host *RedisHost) IsListening(hostname string) bool {
 	channels, err := host.Rdb.PubSubChannels(ctx, "drsh:"+hostname).Result()
 	return err == nil && len(channels) > 0
 }
 
-// If key exchange has been performed, encryption will be enabled.
+// IsEncryptionEnabled should return true if encryption has been enabled, preferrably after
+// key exchange has been performed.
 func (host *RedisHost) IsEncryptionEnabled() bool {
 	host.KXMtx.Lock()
 	defer host.KXMtx.Unlock()
 	return host.KXEnabled
 }
 
-// Set by the key exchange protocol upon completion.
+// SetEncryptionEnabled is set by the key exchange protocol upon completion.
 func (host *RedisHost) SetEncryptionEnabled(enabled bool) {
 	host.KXMtx.Lock()
 	defer host.KXMtx.Unlock()
 	host.KXEnabled = enabled
 }
 
-// Creates the host's keypair needed for key exchange.
+// PrepareKeyExchange creates the host's keypair needed for key exchange.
 func (host *RedisHost) PrepareKeyExchange() error {
 	grp, err := dhkx.GetGroup(0)
 	if err != nil {
@@ -156,8 +161,9 @@ func (host *RedisHost) PrepareKeyExchange() error {
 	return nil
 }
 
+// CompleteKeyExchange marks the completion of the key exchange protocol.
 // When the key exchange handshake is performed, the other host's public
-// key is mixed with the keypair generated via PrepareKeyExchange(). This
+// key is mixed with the keypair generated via PrepareKeyExchange. This
 // creates a shared secret, passed through a KDF and given to a cipher.
 func (host *RedisHost) CompleteKeyExchange(key []byte) error {
 	pub := dhkx.NewPublicKey(key)
@@ -177,7 +183,7 @@ func (host *RedisHost) CompleteKeyExchange(key []byte) error {
 	return nil
 }
 
-// Ensures that the private key is no longer tracked, allowing for it to
+// FreePrivateKeys removes references to the keypair, allowing for it to
 // be garbage collected.
 func (host *RedisHost) FreePrivateKeys() {
 	host.KXGroup = nil
@@ -215,8 +221,9 @@ func (host *RedisHost) decryptMessage(data []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// Thread-safe method for sending a message to a specific host on the network.
+// SendMessage sends a message to a specific host on the network.
 // Encryption is handled by the host if key exchange has been performed.
+// It should be completely thread-safe.
 func (host *RedisHost) SendMessage(recipient string, msg drshproto.Message) {
 	host.Outgoing <- outgoingMessage{
 		Recipient:     recipient,
@@ -321,7 +328,7 @@ func (host *RedisHost) waitUntilReady() {
 	}
 }
 
-// Starting the host means that upon completion of this function, the host
+// Start starts the host. Upon completion of this function, the host
 // can both send and receive messages through its Redis node. It is actively
 // listening for incoming messages from counterparties and sending outgoing
 // messages from its own queue.
@@ -331,10 +338,9 @@ func (host *RedisHost) Start() {
 	host.waitUntilReady()
 }
 
-// Closing the host means that the connection to Redis is dropped and the
-// host can no longer send messages. Note that if the host was inherited
-// (e.g. a server spawns a session), then the underlying connection is not
-// dropped.
+// Close closes the host. The connection to Redis is dropped and the
+// host can no longer send messages. If the host was created using NewInheritedRedisHost
+// (e.g. a server spawns a session), then the underlying connection is left intact.
 func (host *RedisHost) Close() {
 	// Indicate that we are closed
 	host.OpenMtx.Lock()

@@ -17,40 +17,44 @@ import (
 	"golang.org/x/term"
 )
 
-type PingResponse struct {
+type pingResponse struct {
 	Sender   string
 	Size     int
 	RecvTime time.Time
 }
 
+// Client represents a host on the network who wishes to do something with a specific server,
+// whether this is a file-transfer operation, an interactive session, or a series of pings.
 type Client struct {
-	Host                *drshhost.RedisHost
-	Logger              *zap.SugaredLogger
-	RawHostname         string
-	RemoteUser          string
-	RemoteHostname      string
+	Host                 *drshhost.RedisHost
+	Logger               *zap.SugaredLogger
+	RawHostname          string
+	RemoteUser           string
+	RemoteHostname       string
 	LastMessageMutex     sync.Mutex
 	LastMessageTimestamp time.Time
-	ConnectedState      bool
-	ConnectedSession    string
-	Pinged              chan PingResponse
-	Connected           chan bool
-	Finished            chan bool
+	ConnectedState       bool
+	ConnectedSession     string
+	Pinged               chan pingResponse
+	Connected            chan bool
+	Finished             chan bool
 }
 
 var ctx = context.Background()
 
+// NewClient creates a new client and its underlying connection to Redis. It is not actively
+// receiving and sending packets at this point; that is only enabled upon start.
 func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogger) (*Client, error) {
 	clnt := Client{
-		Logger:              logger,
-		RawHostname:         hostname,
-		RemoteUser:          user,
-		RemoteHostname:      "se-" + hostname,
+		Logger:               logger,
+		RawHostname:          hostname,
+		RemoteUser:           user,
+		RemoteHostname:       "se-" + hostname,
 		LastMessageTimestamp: time.Now(),
-		ConnectedState:      false,
-		Connected:           make(chan bool, 1),
-		Finished:            make(chan bool, 1),
-		Pinged:              make(chan PingResponse, 1),
+		ConnectedState:       false,
+		Connected:            make(chan bool, 1),
+		Finished:             make(chan bool, 1),
+		Pinged:               make(chan pingResponse, 1),
 	}
 	name, err := drshutil.RandomName()
 	if err != nil {
@@ -76,7 +80,7 @@ func (clnt *Client) isExpired() bool {
 }
 
 func (clnt *Client) handlePing(sender string, size int) {
-	clnt.Pinged <- PingResponse{
+	clnt.Pinged <- pingResponse{
 		Sender:   sender,
 		Size:     size,
 		RecvTime: time.Now(),
@@ -103,7 +107,7 @@ func (clnt *Client) handleHandshake(sender string, success bool, key []byte, ses
 	}
 }
 
-func (clnt *Client) handleOutput(sender string, payload []byte) {
+func (clnt *Client) handlePtyOutput(sender string, payload []byte) {
 	if clnt.ConnectedState && sender == clnt.ConnectedSession {
 		_, err := os.Stdout.Write(payload)
 		if err != nil {
@@ -141,7 +145,7 @@ func (clnt *Client) handleMessage(msg drshproto.Message) {
 	case drshproto.Message_HANDSHAKE_RESPONSE:
 		clnt.handleHandshake(msg.GetSender(), msg.GetHandshakeSuccess(), msg.GetHandshakeKey(), msg.GetHandshakeSession(), msg.GetHandshakeMotd())
 	case drshproto.Message_PTY_OUTPUT:
-		clnt.handleOutput(msg.GetSender(), msg.GetPtyIo())
+		clnt.handlePtyOutput(msg.GetSender(), msg.GetPtyIo())
 	case drshproto.Message_EXIT:
 		clnt.handleExit(nil, false)
 	default:
@@ -149,6 +153,7 @@ func (clnt *Client) handleMessage(msg drshproto.Message) {
 	}
 }
 
+// Connect is a blocking function that facilitates an interactive session with its server.
 func (clnt *Client) Connect() {
 	if !clnt.Host.IsListening(clnt.RemoteHostname) {
 		clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
@@ -224,6 +229,8 @@ func (clnt *Client) Connect() {
 	fmt.Printf("Connection to %s closed.\n", clnt.RawHostname)
 }
 
+// Ping is a blocking function that streams an infinite series of pings to the server,
+// until it receives an interrupt from the user.
 func (clnt *Client) Ping() {
 	if !clnt.Host.IsListening(clnt.RemoteHostname) {
 		clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
@@ -260,7 +267,7 @@ func (clnt *Client) Ping() {
 		sentTime := time.Now()
 		clnt.Host.SendMessage(clnt.RemoteHostname, msg)
 		sentCnt++
-		var resp PingResponse
+		var resp pingResponse
 		for {
 			resp = <-clnt.Pinged
 			if resp.Sender == clnt.RemoteHostname {
@@ -283,6 +290,9 @@ func (clnt *Client) Ping() {
 
 func (clnt *Client) startTimeoutHandler() {
 	for {
+		if !clnt.Host.IsOpen() {
+			break
+		}
 		if clnt.isExpired() {
 			clnt.handleExit(fmt.Errorf("server timed out"), true)
 			break
@@ -291,11 +301,13 @@ func (clnt *Client) startTimeoutHandler() {
 	}
 }
 
+// Start is a non-blocking function that enables client packet processing.
 func (clnt *Client) Start() {
 	go clnt.startTimeoutHandler()
 	clnt.Host.Start()
 }
 
+// Close is called to destroy the client's Redis connection and perform cleanup.
 func (clnt *Client) Close() {
 	clnt.Host.Close()
 }

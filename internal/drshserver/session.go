@@ -17,6 +17,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// Session represents the server's view of the connection between it and the client.
+// Every session between a server and a client is considered unique. The session piggybacks
+// off of the server's own Redis connection so that not as much TCP state has to be maintained.
+// In many ways, a session is analogous to an encrypted tunnel in SSH, as the session can only
+// be created after a successful key exchange occurring in a handshake. Every session also
+// maintains its own pseudoterminal that is controlled by the client.
 type Session struct {
 	Host                 *drshhost.RedisHost
 	Pty                  *os.File
@@ -50,6 +56,10 @@ func userShell(username string) (*exec.Cmd, error) {
 	return exec.Command("sudo", "-u", username, shell, "-l"), nil
 }
 
+// NewSessionFromHandshake creates a session given that the server has received a handshake
+// request packet with necessary information like a client's public key and target username.
+// It sets up the Redis host, subscribes to the proper channel, assigns a name to the session,
+// sets up encryption, and initializes the client's interactive pseudoterminal.
 func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username string) (*Session, error) {
 	// Initialize pseudoterminal
 	cmd, err := userShell(username)
@@ -126,6 +136,8 @@ func (session *Session) handlePtyWinch(rows uint16, cols uint16, xpixels uint16,
 		X:    xpixels,
 		Y:    ypixels,
 	})
+	// The session only begins broadcasting output after it has received initial terminal dimensions from the client.
+	// This has to be done so the output sent between the handshake and initial winch does not appear mangled.
 	if !session.Resized {
 		go session.startOutputHandler()
 	}
@@ -204,11 +216,13 @@ func (session *Session) startTimeoutHandler() {
 	}
 }
 
+// Start is a non-blocking function that enables session packet processing.
 func (session *Session) Start() {
 	go session.startTimeoutHandler()
 	session.Host.Start()
 }
 
+// Close is called to perform session cleanup but does not destroy the Redis connection.
 func (session *Session) Close() {
 	session.Pty.Close()
 	session.Host.Close()
