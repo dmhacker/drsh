@@ -26,7 +26,7 @@ You can install drsh locally using `go get`.
 Make sure you are using go version 1.14+.
 
 ```
-go get -v -u github.com/dmhacker/drsh/cmd/drsh
+go get -u github.com/dmhacker/drsh/cmd/drsh
 ```
 
 You can also update drsh using the same command.
