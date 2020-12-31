@@ -23,7 +23,7 @@ to a mutually agreed upon Redis node.
 ### Installation
 
 You can install drsh locally using `go get`. 
-Make sure you are using go version 1.14+.
+Make sure you are using go version 1.13+.
 
 ```
 go get -u github.com/dmhacker/drsh/cmd/drsh
