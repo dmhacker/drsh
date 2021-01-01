@@ -11,7 +11,7 @@ import (
 // AliasEntry consists of a unique name (alias), a username, a hostname, and Redis URI to connect to.
 type AliasEntry struct {
 	Alias    string `mapstructure:"alias"`
-	User     string `mapstructure:"user"`
+	Username string `mapstructure:"username"`
 	Hostname string `mapstructure:"hostname"`
 	RedisURI string `mapstructure:"redisuri"`
 }
@@ -59,7 +59,7 @@ func WriteDefaultConfig(filename string) error {
 	viper.SetDefault("Client.Aliases", [1]AliasEntry{
 		{
 			Alias:    currHostname,
-			User:     currUser.Username,
+			Username: currUser.Username,
 			Hostname: currHostname,
 			RedisURI: "redis://localhost:6379",
 		},

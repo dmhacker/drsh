@@ -127,14 +127,14 @@ func newClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client 
 			er(fmt.Errorf("command should either be an alias or in the format USER@HOST@URI"))
 		}
 		selection = drshconf.AliasEntry{
-			User:     components[0],
+			Username: components[0],
 			Hostname: components[1],
 			RedisURI: strings.Join(components[2:], "@"),
 		}
 	}
 
 	// Return the client
-	clnt, err := drshclient.NewClient(selection.User, selection.Hostname, selection.RedisURI, sugar)
+	clnt, err := drshclient.NewClient(selection.Username, selection.Hostname, selection.RedisURI, sugar)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)

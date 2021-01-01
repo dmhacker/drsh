@@ -29,7 +29,7 @@ type Client struct {
 	Host                 *drshhost.RedisHost
 	Logger               *zap.SugaredLogger
 	RawHostname          string
-	RemoteUser           string
+	RemoteUsername       string
 	RemoteHostname       string
 	LastMessageMutex     sync.Mutex
 	LastMessageTimestamp time.Time
@@ -44,11 +44,11 @@ var ctx = context.Background()
 
 // NewClient creates a new client and its underlying connection to Redis. It is not actively
 // receiving and sending packets at this point; that is only enabled upon start.
-func NewClient(user string, hostname string, uri string, logger *zap.SugaredLogger) (*Client, error) {
+func NewClient(username string, hostname string, uri string, logger *zap.SugaredLogger) (*Client, error) {
 	clnt := Client{
 		Logger:               logger,
 		RawHostname:          hostname,
-		RemoteUser:           user,
+		RemoteUsername:       username,
 		RemoteHostname:       "se-" + hostname,
 		LastMessageTimestamp: time.Now(),
 		ConnectedState:       false,
@@ -169,7 +169,7 @@ func (clnt *Client) Connect() {
 		Type:          drshproto.Message_HANDSHAKE_REQUEST,
 		Sender:        clnt.Host.Hostname,
 		HandshakeKey:  clnt.Host.KXPrivateKey.Bytes(),
-		HandshakeUser: clnt.RemoteUser,
+		HandshakeUser: clnt.RemoteUsername,
 	})
 	// Wait until we have received a handshake response from the server
 	// This will put us into our own server session
