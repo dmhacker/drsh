@@ -166,10 +166,12 @@ func (clnt *Client) Connect() {
 		return
 	}
 	clnt.Host.SendMessage(clnt.RemoteHostname, drshproto.Message{
-		Type:          drshproto.Message_HANDSHAKE_REQUEST,
-		Sender:        clnt.Host.Hostname,
-		HandshakeKey:  clnt.Host.KXPrivateKey.Bytes(),
-		HandshakeUser: clnt.RemoteUsername,
+		Type:              drshproto.Message_HANDSHAKE_REQUEST,
+		Sender:            clnt.Host.Hostname,
+		HandshakeKey:      clnt.Host.KXPrivateKey.Bytes(),
+		HandshakeUser:     clnt.RemoteUsername,
+		HandshakeMode:     drshproto.Message_MODE_TERMINAL,
+		HandshakeFilename: "",
 	})
 	// Wait until we have received a handshake response from the server
 	// This will put us into our own server session
