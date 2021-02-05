@@ -169,7 +169,7 @@ func (session *Session) handleMessage(msg drshproto.Message) {
 	case drshproto.Message_HEARTBEAT_REQUEST:
 		session.handleHeartbeat()
 	case drshproto.Message_PTY_INPUT:
-		session.handlePtyInput(msg.GetPtyIo())
+		session.handlePtyInput(msg.GetPtyPayload())
 	case drshproto.Message_PTY_WINCH:
 		dims := drshutil.Unpack64(msg.GetPtyDimensions())
 		session.handlePtyWinch(dims[0], dims[1], dims[2], dims[3])
@@ -192,9 +192,9 @@ func (session *Session) startOutputHandler() {
 			break
 		}
 		session.Host.SendMessage(session.ClientHostname, drshproto.Message{
-			Type:   drshproto.Message_PTY_OUTPUT,
-			Sender: session.Host.Hostname,
-			PtyIo:  buf[:cnt],
+			Type:       drshproto.Message_PTY_OUTPUT,
+			Sender:     session.Host.Hostname,
+			PtyPayload: buf[:cnt],
 		})
 		// This delay is chosen such that output from the pty is able to
 		// buffer, resulting larger packets, more efficient usage of the link,

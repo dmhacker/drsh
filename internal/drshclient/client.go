@@ -145,7 +145,7 @@ func (clnt *Client) handleMessage(msg drshproto.Message) {
 	case drshproto.Message_HANDSHAKE_RESPONSE:
 		clnt.handleHandshake(msg.GetSender(), msg.GetHandshakeSuccess(), msg.GetHandshakeKey(), msg.GetHandshakeSession(), msg.GetHandshakeMotd())
 	case drshproto.Message_PTY_OUTPUT:
-		clnt.handlePtyOutput(msg.GetSender(), msg.GetPtyIo())
+		clnt.handlePtyOutput(msg.GetSender(), msg.GetPtyPayload())
 	case drshproto.Message_EXIT:
 		clnt.handleExit(nil, false)
 	default:
@@ -202,9 +202,9 @@ func (clnt *Client) Connect() {
 				break
 			}
 			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
-				Type:   drshproto.Message_PTY_INPUT,
-				Sender: clnt.Host.Hostname,
-				PtyIo:  buf[:cnt],
+				Type:       drshproto.Message_PTY_INPUT,
+				Sender:     clnt.Host.Hostname,
+				PtyPayload: buf[:cnt],
 			})
 		}
 	})()

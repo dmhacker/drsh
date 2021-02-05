@@ -15,11 +15,15 @@ message Message {
     HANDSHAKE_REQUEST = 4;
     PTY_INPUT = 5;
     PTY_WINCH = 6;
+    DOWNLOAD_REQUEST = 7;
+    UPLOAD_REQUEST = 8;
+    UPLOAD_CHUNK = 9;
     // Client-bound
-    PING_RESPONSE = 7;
-    HEARTBEAT_RESPONSE = 8;
-    HANDSHAKE_RESPONSE = 9;
-    PTY_OUTPUT = 10;
+    PING_RESPONSE = 10;
+    HEARTBEAT_RESPONSE = 11;
+    HANDSHAKE_RESPONSE = 12;
+    PTY_OUTPUT = 13;
+    DOWNLOAD_CHUNK = 14;
   }
 
   // All messages
@@ -27,7 +31,7 @@ message Message {
   string sender = 2;
 
   // PTY messages
-  bytes pty_io = 3;
+  bytes pty_payload = 3;
   uint64 pty_dimensions = 4;
 
   // Handshake messages
@@ -36,6 +40,14 @@ message Message {
   string handshake_session = 8;
   string handshake_user = 9;
   string handshake_motd = 10;
+
+  // Upload messages
+  string upload_file = 11;
+  bytes upload_payload = 12;
+
+  // Download messages
+  string download_file = 13;
+  bytes download_payload = 14;
 }
 
 message EncryptedMessage {
