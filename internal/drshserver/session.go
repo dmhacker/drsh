@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -74,15 +75,37 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 		return nil, err
 	}
 
+	// Adjust remote filename to be relative to current user's home directory
+	// filepath.Abs is relative to the working directory, so the WD needs to be temporarily set
+	// to the home directory if the server is run from a subdirectory
+	savedWd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	usr, err := user.Lookup(username)
+	if err != nil {
+		return nil, err
+	}
+	err = os.Chdir(usr.HomeDir)
+	if err != nil {
+		return nil, err
+	}
+	adjustedFilename, err := filepath.Abs(filename)
+	if err != nil {
+		os.Chdir(savedWd)
+		return nil, err
+	}
+	os.Chdir(savedWd)
+
 	// Open file for uploading, downloading depending on mode
 	var transferFile *os.File
 	if mode == drshproto.Message_MODE_FILE_UPLOAD {
-		transferFile, err = os.Create(filename)
+		transferFile, err = os.Create(adjustedFilename)
 		if err != nil {
 			return nil, err
 		}
 	} else if mode == drshproto.Message_MODE_FILE_DOWNLOAD {
-		transferFile, err = os.Open(filename)
+		transferFile, err = os.Open(adjustedFilename)
 		if err != nil {
 			return nil, err
 		}

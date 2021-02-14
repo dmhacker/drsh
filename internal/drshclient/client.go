@@ -229,7 +229,7 @@ func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
 // DownloadFile downloads a file from the remote server.
 func (clnt *Client) DownloadFile(remoteFilename string, localFilename string) {
 	clnt.connect(drshproto.Message_MODE_FILE_DOWNLOAD, remoteFilename)
-	transferFile, err := os.Open(localFilename)
+	transferFile, err := os.Create(localFilename)
 	if err != nil {
 		clnt.handleExit(fmt.Errorf("cannot create file '%s'", localFilename), true)
 		return
