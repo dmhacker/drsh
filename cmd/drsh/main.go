@@ -42,17 +42,33 @@ session, requiring the use of a pty.`,
 	connectCmd = &cobra.Command{
 		Use:   "connect [alias|user@host@redis]",
 		Args:  cobra.ExactArgs(1),
-		Short: "Connects to a drsh server",
+		Short: "Connects to a remote server",
 		Long: `Connects to a host on the Redis network using the given 
 hostname and username. Connection strings are either provided as a 
 config-defined alias  or in raw format. The session is assumed to be interactive;
 there is no option to disable the pty at the moment.`,
 		Run: runConnect,
 	}
+	uploadCmd = &cobra.Command{
+		Use:   "upload [alias|user@host@redis] [local_file] [remote_file]",
+		Args:  cobra.ExactArgs(3),
+		Short: "Uploads a file to a remote server",
+		Long: `Uploads a file to a remote server from a file specified by the local filename.
+The remote filename is given from the perspective of the user's home directory.`,
+		Run: runUpload,
+	}
+	downloadCmd = &cobra.Command{
+		Use:   "download [alias|user@host@redis] [remote_file] [local_file]",
+		Args:  cobra.ExactArgs(3),
+		Short: "Downloads a file from a remote server",
+		Long: `Downloads a file from a remote server to the file specified by the local filename.
+The remote filename is given from the perspective of the user's home directory.`,
+		Run: runDownload,
+	}
 	pingCmd = &cobra.Command{
 		Use:   "ping [alias|user@host@redis]",
 		Args:  cobra.ExactArgs(1),
-		Short: "Pings a drsh server",
+		Short: "Pings a remote server",
 		Long: `Calculates the RTT from the current machine to the specified server.
 Connection strings are either provided as an alias in the config or in raw format.`,
 		Run: runPing,
@@ -146,7 +162,21 @@ func runConnect(cmd *cobra.Command, args []string) {
 	clnt := newClientFromCommand(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
-	clnt.Connect()
+	clnt.OpenCommandLine()
+}
+
+func runUpload(cmd *cobra.Command, args []string) {
+	clnt := newClientFromCommand(cmd, args)
+	defer clnt.Close()
+	clnt.Start()
+	clnt.UploadFile(os.Args[3], os.Args[4])
+}
+
+func runDownload(cmd *cobra.Command, args []string) {
+	clnt := newClientFromCommand(cmd, args)
+	defer clnt.Close()
+	clnt.Start()
+	clnt.DownloadFile(os.Args[3], os.Args[4])
 }
 
 func runPing(cmd *cobra.Command, args []string) {
@@ -175,6 +205,8 @@ func main() {
 	rootCmd.AddCommand(cfgCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(connectCmd)
+	rootCmd.AddCommand(uploadCmd)
+	rootCmd.AddCommand(downloadCmd)
 	rootCmd.AddCommand(pingCmd)
 
 	rootCmd.Execute()
