@@ -193,7 +193,7 @@ func (clnt *Client) connect(mode drshproto.Message_SessionMode, filename string)
 
 // UploadFile uploads a file to the remote server.
 func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
-	clnt.connect(drshproto.Message_MODE_FILE_UPLOAD, remoteFilename)
+	// Open file for reading
 	transferFile, err := os.Open(localFilename)
 	if err != nil {
 		clnt.handleExit(fmt.Errorf("cannot open file '%s'", localFilename), true)
@@ -201,6 +201,8 @@ func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
 	}
 	clnt.TransferFile = transferFile
 	defer clnt.TransferFile.Close()
+	// Establish secure connection to the server
+	clnt.connect(drshproto.Message_MODE_FILE_UPLOAD, remoteFilename)
 	// Read from local file, break into packets, and send each one individually
 	go (func() {
 		for {
@@ -222,13 +224,13 @@ func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
 			})
 		}
 	})()
-	// Wait until at least one thread messages the finished channel
+	// Finished channel will be triggered on error or client exit due to completion
 	<-clnt.Finished
 }
 
 // DownloadFile downloads a file from the remote server.
 func (clnt *Client) DownloadFile(remoteFilename string, localFilename string) {
-	clnt.connect(drshproto.Message_MODE_FILE_DOWNLOAD, remoteFilename)
+	// Open file for writing
 	transferFile, err := os.Create(localFilename)
 	if err != nil {
 		clnt.handleExit(fmt.Errorf("cannot create file '%s'", localFilename), true)
@@ -236,7 +238,9 @@ func (clnt *Client) DownloadFile(remoteFilename string, localFilename string) {
 	}
 	clnt.TransferFile = transferFile
 	defer clnt.TransferFile.Close()
-	// Wait until at least one thread messages the finished channel
+	// Establish secure connection to the server
+	clnt.connect(drshproto.Message_MODE_FILE_DOWNLOAD, remoteFilename)
+	// Finished channel will be triggered on error or server exit due to completion
 	<-clnt.Finished
 }
 
