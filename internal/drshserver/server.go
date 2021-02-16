@@ -42,12 +42,12 @@ func (serv *Server) handlePing(sender string) {
 	})
 }
 
-func (serv *Server) handleHandshake(sender string, key []byte, username string) {
+func (serv *Server) handleHandshake(sender string, key []byte, username string, mode drshproto.Message_SessionMode, filename string) {
 	resp := drshproto.Message{
 		Type:   drshproto.Message_HANDSHAKE_RESPONSE,
 		Sender: serv.Host.Hostname,
 	}
-	session, err := NewSessionFromHandshake(serv, sender, key, username)
+	session, err := NewSessionFromHandshake(serv, sender, key, username, mode, filename)
 	if err != nil {
 		serv.Logger.Warnf("Failed to setup session with '%s': %s", sender, err)
 		resp.HandshakeSuccess = false
@@ -70,7 +70,7 @@ func (serv *Server) handleMessage(msg drshproto.Message) {
 	case drshproto.Message_PING_REQUEST:
 		serv.handlePing(msg.GetSender())
 	case drshproto.Message_HANDSHAKE_REQUEST:
-		serv.handleHandshake(msg.GetSender(), msg.GetHandshakeKey(), msg.GetHandshakeUser())
+		serv.handleHandshake(msg.GetSender(), msg.GetHandshakeKey(), msg.GetHandshakeUser(), msg.GetHandshakeMode(), msg.GetHandshakeFilename())
 	default:
 		serv.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
 	}

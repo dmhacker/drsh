@@ -24,7 +24,7 @@ instead routed through a message broker in form of a Redis instance.`,
 	}
 	cfgCmd = &cobra.Command{
 		Use:   "config",
-		Short: "Creates a default config if one does not exist",
+		Short: "Create a default config if one does not exist",
 		Long: `If a config file does not exist at the given path,
 it will create a default file. drsh should not be run with the default settings
 but the default config provides a useful starting point.`,
@@ -32,28 +32,44 @@ but the default config provides a useful starting point.`,
 	}
 	serveCmd = &cobra.Command{
 		Use:   "serve",
-		Short: "Starts the drsh daemon for this machine",
+		Short: "Start the drsh daemon for this machine",
 		Long: `Actively listen for connection requests from other clients on the
 Redis network. Functions similarily to sshd, only all packets are routed
 through Redis. All clients are assumed to be connecting using an interactive
 session, requiring the use of a pty.`,
 		Run: runServe,
 	}
-	connectCmd = &cobra.Command{
-		Use:   "connect [alias|user@host@redis]",
+	loginCmd = &cobra.Command{
+		Use:   "login [alias|user@host@redis]",
 		Args:  cobra.ExactArgs(1),
-		Short: "Connects to a drsh server",
-		Long: `Connects to a host on the Redis network using the given 
+		Short: "Log in to a remote server",
+		Long: `Open a secure, interactive shell to a host on the Redis network using the given 
 hostname and username. Connection strings are either provided as a 
 config-defined alias  or in raw format. The session is assumed to be interactive;
 there is no option to disable the pty at the moment.`,
-		Run: runConnect,
+		Run: runLogin,
+	}
+	uploadCmd = &cobra.Command{
+		Use:   "upload [alias|user@host@redis] [local_file] [remote_file]",
+		Args:  cobra.ExactArgs(3),
+		Short: "Upload a file to a remote server",
+		Long: `Upload a locally hosted file to a remote server.
+The remote filename should be specified from the perspective of the remote user's home directory.`,
+		Run: runUpload,
+	}
+	downloadCmd = &cobra.Command{
+		Use:   "download [alias|user@host@redis] [remote_file] [local_file]",
+		Args:  cobra.ExactArgs(3),
+		Short: "Download a file from a remote server",
+		Long: `Download a file hosted on a remote server and saves the content to a local file.
+The remote filename should be specified from the perspective of the remote user's home directory.`,
+		Run: runDownload,
 	}
 	pingCmd = &cobra.Command{
 		Use:   "ping [alias|user@host@redis]",
 		Args:  cobra.ExactArgs(1),
-		Short: "Pings a drsh server",
-		Long: `Calculates the RTT from the current machine to the specified server.
+		Short: "Ping a remote server",
+		Long: `Calculate the RTT from the current machine to the specified server.
 Connection strings are either provided as an alias in the config or in raw format.`,
 		Run: runPing,
 	}
@@ -142,11 +158,25 @@ func newClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client 
 	return clnt
 }
 
-func runConnect(cmd *cobra.Command, args []string) {
+func runLogin(cmd *cobra.Command, args []string) {
 	clnt := newClientFromCommand(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
-	clnt.Connect()
+	clnt.LoginInteractively()
+}
+
+func runUpload(cmd *cobra.Command, args []string) {
+	clnt := newClientFromCommand(cmd, args)
+	defer clnt.Close()
+	clnt.Start()
+	clnt.UploadFile(os.Args[3], os.Args[4])
+}
+
+func runDownload(cmd *cobra.Command, args []string) {
+	clnt := newClientFromCommand(cmd, args)
+	defer clnt.Close()
+	clnt.Start()
+	clnt.DownloadFile(os.Args[3], os.Args[4])
 }
 
 func runPing(cmd *cobra.Command, args []string) {
@@ -169,12 +199,14 @@ func main() {
 	}
 	cfgCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
 	serveCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
-	connectCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
+	loginCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
 	pingCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
 
 	rootCmd.AddCommand(cfgCmd)
 	rootCmd.AddCommand(serveCmd)
-	rootCmd.AddCommand(connectCmd)
+	rootCmd.AddCommand(loginCmd)
+	rootCmd.AddCommand(uploadCmd)
+	rootCmd.AddCommand(downloadCmd)
 	rootCmd.AddCommand(pingCmd)
 
 	rootCmd.Execute()

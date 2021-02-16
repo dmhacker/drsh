@@ -3,6 +3,7 @@ package drshclient
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"sync"
@@ -38,6 +39,7 @@ type Client struct {
 	Pinged               chan pingResponse
 	Connected            chan bool
 	Finished             chan bool
+	TransferFile         *os.File
 }
 
 var ctx = context.Background()
@@ -55,6 +57,7 @@ func NewClient(username string, hostname string, uri string, logger *zap.Sugared
 		Connected:            make(chan bool, 1),
 		Finished:             make(chan bool, 1),
 		Pinged:               make(chan pingResponse, 1),
+		TransferFile:         nil,
 	}
 	name, err := drshutil.RandomName()
 	if err != nil {
@@ -116,19 +119,28 @@ func (clnt *Client) handlePtyOutput(sender string, payload []byte) {
 	}
 }
 
+func (clnt *Client) handleFileDownload(sender string, payload []byte) {
+	if clnt.ConnectedState && sender == clnt.ConnectedSession && clnt.TransferFile != nil {
+		_, err := clnt.TransferFile.Write(payload)
+		if err != nil {
+			clnt.handleExit(err, true)
+		}
+	}
+}
+
 func (clnt *Client) handleExit(err error, ack bool) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
-	if ack {
-		clnt.Host.SendMessage(clnt.RemoteHostname, drshproto.Message{
-			Type:   drshproto.Message_EXIT,
-			Sender: clnt.Host.Hostname,
-		})
-		// Add a slight delay so the disconnect packet can send
-		time.Sleep(100 * time.Millisecond)
-	}
 	if clnt.ConnectedState {
+		if ack {
+			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
+				Type:   drshproto.Message_EXIT,
+				Sender: clnt.Host.Hostname,
+			})
+			// Add a slight delay so the disconnect packet can send
+			time.Sleep(100 * time.Millisecond)
+		}
 		clnt.Finished <- true
 	} else {
 		os.Exit(1)
@@ -145,7 +157,9 @@ func (clnt *Client) handleMessage(msg drshproto.Message) {
 	case drshproto.Message_HANDSHAKE_RESPONSE:
 		clnt.handleHandshake(msg.GetSender(), msg.GetHandshakeSuccess(), msg.GetHandshakeKey(), msg.GetHandshakeSession(), msg.GetHandshakeMotd())
 	case drshproto.Message_PTY_OUTPUT:
-		clnt.handlePtyOutput(msg.GetSender(), msg.GetPtyIo())
+		clnt.handlePtyOutput(msg.GetSender(), msg.GetPtyPayload())
+	case drshproto.Message_FILE_DOWNLOAD:
+		clnt.handleFileDownload(msg.GetSender(), msg.GetFilePayload())
 	case drshproto.Message_EXIT:
 		clnt.handleExit(nil, false)
 	default:
@@ -153,8 +167,7 @@ func (clnt *Client) handleMessage(msg drshproto.Message) {
 	}
 }
 
-// Connect is a blocking function that facilitates an interactive session with its server.
-func (clnt *Client) Connect() {
+func (clnt *Client) connect(mode drshproto.Message_SessionMode, filename string) {
 	if !clnt.Host.IsListening(clnt.RemoteHostname) {
 		clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
 		return
@@ -166,14 +179,74 @@ func (clnt *Client) Connect() {
 		return
 	}
 	clnt.Host.SendMessage(clnt.RemoteHostname, drshproto.Message{
-		Type:          drshproto.Message_HANDSHAKE_REQUEST,
-		Sender:        clnt.Host.Hostname,
-		HandshakeKey:  clnt.Host.KXPrivateKey.Bytes(),
-		HandshakeUser: clnt.RemoteUsername,
+		Type:              drshproto.Message_HANDSHAKE_REQUEST,
+		Sender:            clnt.Host.Hostname,
+		HandshakeKey:      clnt.Host.KXPrivateKey.Bytes(),
+		HandshakeUser:     clnt.RemoteUsername,
+		HandshakeMode:     mode,
+		HandshakeFilename: filename,
 	})
 	// Wait until we have received a handshake response from the server
 	// This will put us into our own server session
 	<-clnt.Connected
+}
+
+// UploadFile uploads a file to the remote server.
+func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
+	// Open file for reading
+	transferFile, err := os.Open(localFilename)
+	if err != nil {
+		clnt.handleExit(fmt.Errorf("cannot open file '%s'", localFilename), true)
+		return
+	}
+	clnt.TransferFile = transferFile
+	defer clnt.TransferFile.Close()
+	// Establish secure connection to the server
+	clnt.connect(drshproto.Message_MODE_FILE_UPLOAD, remoteFilename)
+	// Read from local file, break into packets, and send each one individually
+	go (func() {
+		for {
+			buf := make([]byte, 4096)
+			cnt, err := clnt.TransferFile.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					clnt.handleExit(err, true)
+				} else {
+					fmt.Printf("File '%s' was uploaded to '%s@%s:%s'.\n", localFilename, clnt.RemoteUsername, clnt.RawHostname, remoteFilename)
+					clnt.handleExit(nil, true)
+				}
+				break
+			}
+			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
+				Type:        drshproto.Message_FILE_UPLOAD,
+				Sender:      clnt.Host.Hostname,
+				FilePayload: buf[:cnt],
+			})
+		}
+	})()
+	// Finished channel will be triggered on error or client exit due to completion
+	<-clnt.Finished
+}
+
+// DownloadFile downloads a file from the remote server.
+func (clnt *Client) DownloadFile(remoteFilename string, localFilename string) {
+	// Open file for writing
+	transferFile, err := os.Create(localFilename)
+	if err != nil {
+		clnt.handleExit(fmt.Errorf("cannot create file '%s'", localFilename), true)
+		return
+	}
+	clnt.TransferFile = transferFile
+	defer clnt.TransferFile.Close()
+	// Establish secure connection to the server
+	clnt.connect(drshproto.Message_MODE_FILE_DOWNLOAD, remoteFilename)
+	// Finished channel will be triggered on error or server exit due to completion
+	<-clnt.Finished
+}
+
+// LoginInteractively is a blocking function that facilitates an interactive session with its server.
+func (clnt *Client) LoginInteractively() {
+	clnt.connect(drshproto.Message_MODE_TERMINAL, "")
 	// Capture SIGWINCH signals
 	winchChan := make(chan os.Signal)
 	signal.Notify(winchChan, syscall.SIGWINCH)
@@ -195,16 +268,16 @@ func (clnt *Client) Connect() {
 	// Capture input in packets and send to server
 	go (func() {
 		for {
-			buf := make([]byte, 1096)
+			buf := make([]byte, 4096)
 			cnt, err := os.Stdin.Read(buf)
 			if err != nil {
 				clnt.handleExit(err, true)
 				break
 			}
 			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
-				Type:   drshproto.Message_PTY_INPUT,
-				Sender: clnt.Host.Hostname,
-				PtyIo:  buf[:cnt],
+				Type:       drshproto.Message_PTY_INPUT,
+				Sender:     clnt.Host.Hostname,
+				PtyPayload: buf[:cnt],
 			})
 		}
 	})()

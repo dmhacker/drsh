@@ -2,9 +2,11 @@ package drshserver
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -24,6 +26,7 @@ import (
 // be created after a successful key exchange occurring in a handshake. Every session also
 // maintains its own pseudoterminal that is controlled by the client.
 type Session struct {
+	Mode                 drshproto.Message_SessionMode
 	Host                 *drshhost.RedisHost
 	Pty                  *os.File
 	Logger               *zap.SugaredLogger
@@ -31,6 +34,7 @@ type Session struct {
 	Resized              bool
 	LastMessageMutex     sync.Mutex
 	LastMessageTimestamp time.Time
+	TransferFile         *os.File
 }
 
 func userShell(username string) (*exec.Cmd, error) {
@@ -60,7 +64,7 @@ func userShell(username string) (*exec.Cmd, error) {
 // request packet with necessary information like a client's public key and target username.
 // It sets up the Redis host, subscribes to the proper channel, assigns a name to the session,
 // sets up encryption, and initializes the client's interactive pseudoterminal.
-func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username string) (*Session, error) {
+func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username string, mode drshproto.Message_SessionMode, filename string) (*Session, error) {
 	// Initialize pseudoterminal
 	cmd, err := userShell(username)
 	if err != nil {
@@ -71,13 +75,55 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 		return nil, err
 	}
 
+	// Adjust remote filename to be relative to current user's home directory
+	// filepath.Abs is relative to the working directory, so the WD needs to be temporarily set
+	// to the home directory if the server is run from a subdirectory
+	savedWd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	usr, err := user.Lookup(username)
+	if err != nil {
+		return nil, err
+	}
+	err = os.Chdir(usr.HomeDir)
+	if err != nil {
+		return nil, err
+	}
+	adjustedFilename, err := filepath.Abs(filename)
+	if err != nil {
+		os.Chdir(savedWd)
+		return nil, err
+	}
+	os.Chdir(savedWd)
+
+	// Open file for uploading, downloading depending on mode
+	var transferFile *os.File
+	if mode == drshproto.Message_MODE_FILE_UPLOAD {
+		transferFile, err = os.Create(adjustedFilename)
+		if err != nil {
+			return nil, err
+		}
+	} else if mode == drshproto.Message_MODE_FILE_DOWNLOAD {
+		transferFile, err = os.Open(adjustedFilename)
+		if err != nil {
+			return nil, err
+		}
+	} else if mode == drshproto.Message_MODE_TERMINAL {
+		transferFile = nil
+	} else {
+		return nil, fmt.Errorf("invalid session mode")
+	}
+
 	// Initialize session
 	session := Session{
+		Mode:                 mode,
 		ClientHostname:       clnt,
 		Pty:                  ptmx,
 		Logger:               serv.Logger,
 		Resized:              false,
 		LastMessageTimestamp: time.Now(),
+		TransferFile:         transferFile,
 	}
 
 	// Set up session properties & Redis connection
@@ -123,6 +169,9 @@ func (session *Session) handleHeartbeat() {
 }
 
 func (session *Session) handlePtyInput(payload []byte) {
+	if session.Mode != drshproto.Message_MODE_TERMINAL {
+		return
+	}
 	_, err := session.Pty.Write(payload)
 	if err != nil {
 		session.handleExit(err, true)
@@ -130,6 +179,9 @@ func (session *Session) handlePtyInput(payload []byte) {
 }
 
 func (session *Session) handlePtyWinch(rows uint16, cols uint16, xpixels uint16, ypixels uint16) {
+	if session.Mode != drshproto.Message_MODE_TERMINAL {
+		return
+	}
 	pty.Setsize(session.Pty, &pty.Winsize{
 		Rows: rows,
 		Cols: cols,
@@ -139,9 +191,18 @@ func (session *Session) handlePtyWinch(rows uint16, cols uint16, xpixels uint16,
 	// The session only begins broadcasting output after it has received initial terminal dimensions from the client.
 	// This has to be done so the output sent between the handshake and initial winch does not appear mangled.
 	if !session.Resized {
-		go session.startOutputHandler()
+		go session.startPtyOutputHandler()
 	}
 	session.Resized = true
+}
+
+func (session *Session) handleFileUpload(payload []byte) {
+	if session.Mode == drshproto.Message_MODE_FILE_UPLOAD && session.TransferFile != nil {
+		_, err := session.TransferFile.Write(payload)
+		if err != nil {
+			session.handleExit(err, true)
+		}
+	}
 }
 
 func (session *Session) handleExit(err error, ack bool) {
@@ -169,10 +230,12 @@ func (session *Session) handleMessage(msg drshproto.Message) {
 	case drshproto.Message_HEARTBEAT_REQUEST:
 		session.handleHeartbeat()
 	case drshproto.Message_PTY_INPUT:
-		session.handlePtyInput(msg.GetPtyIo())
+		session.handlePtyInput(msg.GetPtyPayload())
 	case drshproto.Message_PTY_WINCH:
 		dims := drshutil.Unpack64(msg.GetPtyDimensions())
 		session.handlePtyWinch(dims[0], dims[1], dims[2], dims[3])
+	case drshproto.Message_FILE_UPLOAD:
+		session.handleFileUpload(msg.GetFilePayload())
 	case drshproto.Message_EXIT:
 		session.handleExit(nil, false)
 	default:
@@ -180,7 +243,7 @@ func (session *Session) handleMessage(msg drshproto.Message) {
 	}
 }
 
-func (session *Session) startOutputHandler() {
+func (session *Session) startPtyOutputHandler() {
 	for {
 		if !session.Host.IsOpen() {
 			break
@@ -192,15 +255,35 @@ func (session *Session) startOutputHandler() {
 			break
 		}
 		session.Host.SendMessage(session.ClientHostname, drshproto.Message{
-			Type:   drshproto.Message_PTY_OUTPUT,
-			Sender: session.Host.Hostname,
-			PtyIo:  buf[:cnt],
+			Type:       drshproto.Message_PTY_OUTPUT,
+			Sender:     session.Host.Hostname,
+			PtyPayload: buf[:cnt],
 		})
 		// This delay is chosen such that output from the pty is able to
 		// buffer, resulting larger packets, more efficient usage of the link,
 		// and more responsiveness for interactive applications like top.
 		// Too large of a delay would create the perception of lag.
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (session *Session) startFileDownloadHandler() {
+	for {
+		buf := make([]byte, 4096)
+		cnt, err := session.TransferFile.Read(buf)
+		if err != nil {
+			if err != io.EOF {
+				session.handleExit(err, true)
+			} else {
+				session.handleExit(nil, true)
+			}
+			break
+		}
+		session.Host.SendMessage(session.ClientHostname, drshproto.Message{
+			Type:        drshproto.Message_FILE_DOWNLOAD,
+			Sender:      session.Host.Hostname,
+			FilePayload: buf[:cnt],
+		})
 	}
 }
 
@@ -219,6 +302,9 @@ func (session *Session) startTimeoutHandler() {
 // Start is a non-blocking function that enables session packet processing.
 func (session *Session) Start() {
 	go session.startTimeoutHandler()
+	if session.Mode == drshproto.Message_MODE_FILE_DOWNLOAD {
+		go session.startFileDownloadHandler()
+	}
 	session.Host.Start()
 }
 
@@ -226,4 +312,7 @@ func (session *Session) Start() {
 func (session *Session) Close() {
 	session.Pty.Close()
 	session.Host.Close()
+	if session.TransferFile != nil {
+		session.TransferFile.Close()
+	}
 }

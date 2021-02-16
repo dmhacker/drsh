@@ -15,11 +15,19 @@ message Message {
     HANDSHAKE_REQUEST = 4;
     PTY_INPUT = 5;
     PTY_WINCH = 6;
+    FILE_UPLOAD = 7;
     // Client-bound
-    PING_RESPONSE = 7;
-    HEARTBEAT_RESPONSE = 8;
-    HANDSHAKE_RESPONSE = 9;
-    PTY_OUTPUT = 10;
+    PING_RESPONSE = 8;
+    HEARTBEAT_RESPONSE = 9;
+    HANDSHAKE_RESPONSE = 10;
+    PTY_OUTPUT = 11;
+    FILE_DOWNLOAD = 12;
+  }
+
+  enum SessionMode {
+    MODE_TERMINAL = 0;
+    MODE_FILE_UPLOAD = 1;
+    MODE_FILE_DOWNLOAD = 2;
   }
 
   // All messages
@@ -27,7 +35,7 @@ message Message {
   string sender = 2;
 
   // PTY messages
-  bytes pty_io = 3;
+  bytes pty_payload = 3;
   uint64 pty_dimensions = 4;
 
   // Handshake messages
@@ -36,6 +44,11 @@ message Message {
   string handshake_session = 8;
   string handshake_user = 9;
   string handshake_motd = 10;
+  SessionMode handshake_mode = 11;
+  string handshake_filename = 12;
+
+  // File messages
+  bytes file_payload = 13;
 }
 
 message EncryptedMessage {
