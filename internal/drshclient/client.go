@@ -132,15 +132,15 @@ func (clnt *Client) handleExit(err error, ack bool) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
-	if ack {
-		clnt.Host.SendMessage(clnt.RemoteHostname, drshproto.Message{
-			Type:   drshproto.Message_EXIT,
-			Sender: clnt.Host.Hostname,
-		})
-		// Add a slight delay so the disconnect packet can send
-		time.Sleep(100 * time.Millisecond)
-	}
 	if clnt.ConnectedState {
+		if ack {
+			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
+				Type:   drshproto.Message_EXIT,
+				Sender: clnt.Host.Hostname,
+			})
+			// Add a slight delay so the disconnect packet can send
+			time.Sleep(100 * time.Millisecond)
+		}
 		clnt.Finished <- true
 	} else {
 		os.Exit(1)
