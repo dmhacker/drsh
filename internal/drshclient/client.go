@@ -244,8 +244,8 @@ func (clnt *Client) DownloadFile(remoteFilename string, localFilename string) {
 	<-clnt.Finished
 }
 
-// StartCommandLine is a blocking function that facilitates an interactive session with its server.
-func (clnt *Client) OpenCommandLine() {
+// LoginInteractively is a blocking function that facilitates an interactive session with its server.
+func (clnt *Client) LoginInteractively() {
 	clnt.connect(drshproto.Message_MODE_TERMINAL, "")
 	// Capture SIGWINCH signals
 	winchChan := make(chan os.Signal)
