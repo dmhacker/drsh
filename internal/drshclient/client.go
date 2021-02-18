@@ -40,6 +40,7 @@ type Client struct {
 	Connected            chan bool
 	Finished             chan bool
 	TransferFile         *os.File
+	DisplayMotd          bool
 }
 
 var ctx = context.Background()
@@ -58,6 +59,7 @@ func NewClient(username string, hostname string, uri string, logger *zap.Sugared
 		Finished:             make(chan bool, 1),
 		Pinged:               make(chan pingResponse, 1),
 		TransferFile:         nil,
+		DisplayMotd:          false,
 	}
 	name, err := drshutil.RandomName()
 	if err != nil {
@@ -103,7 +105,9 @@ func (clnt *Client) handleHandshake(sender string, success bool, key []byte, ses
 		}
 		clnt.Host.FreePrivateKeys()
 		clnt.Host.SetEncryptionEnabled(true)
-		fmt.Print(motd)
+		if clnt.DisplayMotd {
+			fmt.Print(motd)
+		}
 		clnt.ConnectedSession = session
 		clnt.ConnectedState = true
 		clnt.Connected <- true
@@ -201,6 +205,7 @@ func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
 	}
 	clnt.TransferFile = transferFile
 	defer clnt.TransferFile.Close()
+	clnt.DisplayMotd = false
 	// Establish secure connection to the server
 	clnt.connect(drshproto.Message_MODE_FILE_UPLOAD, remoteFilename)
 	// Read from local file, break into packets, and send each one individually
@@ -238,6 +243,7 @@ func (clnt *Client) DownloadFile(remoteFilename string, localFilename string) {
 	}
 	clnt.TransferFile = transferFile
 	defer clnt.TransferFile.Close()
+	clnt.DisplayMotd = false
 	// Establish secure connection to the server
 	clnt.connect(drshproto.Message_MODE_FILE_DOWNLOAD, remoteFilename)
 	// Finished channel will be triggered on error or server exit due to completion
@@ -246,6 +252,7 @@ func (clnt *Client) DownloadFile(remoteFilename string, localFilename string) {
 
 // LoginInteractively is a blocking function that facilitates an interactive session with its server.
 func (clnt *Client) LoginInteractively() {
+	clnt.DisplayMotd = true
 	clnt.connect(drshproto.Message_MODE_TERMINAL, "")
 	// Capture SIGWINCH signals
 	winchChan := make(chan os.Signal)
