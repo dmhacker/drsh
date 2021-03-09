@@ -135,6 +135,9 @@ func (clnt *Client) handleFileDownload(sender string, payload []byte) {
 func (clnt *Client) handleExit(err error, ack bool) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		clnt.Logger.Infof("Client exited with error: %s", err)
+	} else {
+		clnt.Logger.Info("Client exited normally.")
 	}
 	if clnt.ConnectedState {
 		if ack {
