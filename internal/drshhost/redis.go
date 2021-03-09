@@ -190,6 +190,18 @@ func (host *RedisHost) FreePrivateKeys() {
 	host.KXPrivateKey = nil
 }
 
+// SendMessage sends a message to a specific host on the network.
+// Encryption is handled by the host if key exchange has been performed.
+// It should be completely thread-safe.
+func (host *RedisHost) SendMessage(recipient string, msg drshproto.Message) {
+	host.Outgoing <- outgoingMessage{
+		Recipient:     recipient,
+		Message:       msg,
+		ShouldEncrypt: host.IsEncryptionEnabled(),
+		ShouldKill:    false,
+	}
+}
+
 func (host *RedisHost) encryptMessage(data []byte) ([]byte, error) {
 	nonce := make([]byte, chacha20poly1305.NonceSize)
 	_, err := rand.Read(nonce)
@@ -219,18 +231,6 @@ func (host *RedisHost) decryptMessage(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	return plaintext, nil
-}
-
-// SendMessage sends a message to a specific host on the network.
-// Encryption is handled by the host if key exchange has been performed.
-// It should be completely thread-safe.
-func (host *RedisHost) SendMessage(recipient string, msg drshproto.Message) {
-	host.Outgoing <- outgoingMessage{
-		Recipient:     recipient,
-		Message:       msg,
-		ShouldEncrypt: host.IsEncryptionEnabled(),
-		ShouldKill:    false,
-	}
 }
 
 func (host *RedisHost) startMessageSender() {

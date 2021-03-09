@@ -21,9 +21,11 @@ type Config struct {
 	Server struct {
 		Hostname string `mapstructure:"hostname"`
 		RedisURI string `mapstructure:"redisuri"`
+		LogFile  string `mapstructure:"logfile"`
 	} `mapstructure:"server"`
 	Client struct {
 		Aliases []AliasEntry `mapstructure:"aliases"`
+		LogFile string       `mapstructure:"logfile"`
 	} `mapstructure:"client"`
 }
 
@@ -43,6 +45,22 @@ func DefaultConfigFilename() (string, error) {
 	return filepath.Join(configHome, "drsh", "config.yml"), nil
 }
 
+// DefaultLogFilename returns the default location of a log file on the user's system.
+func DefaultLogFilename(hostType string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	configHome := os.Getenv("XDG_CONFIG_HOME")
+	if len(configHome) == 0 {
+		configHome = filepath.Join(home, ".config")
+	}
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configHome, "drsh", "logs", hostType+".log"), nil
+}
+
 // WriteDefaultConfig will write a default config if one does not exist already.
 // It will also create any necessary nested parent directories.
 func WriteDefaultConfig(filename string) error {
@@ -54,8 +72,17 @@ func WriteDefaultConfig(filename string) error {
 	if err != nil {
 		return err
 	}
+	servLogFile, err := DefaultLogFilename("server")
+	if err != nil {
+		return err
+	}
+	clntLogFile, err := DefaultLogFilename("client")
+	if err != nil {
+		return err
+	}
 	viper.SetDefault("Server.Hostname", currHostname)
 	viper.SetDefault("Server.RedisUri", "redis://localhost:6379")
+	viper.SetDefault("Server.LogFile", servLogFile)
 	viper.SetDefault("Client.Aliases", [1]AliasEntry{
 		{
 			Alias:    currHostname,
@@ -64,6 +91,7 @@ func WriteDefaultConfig(filename string) error {
 			RedisURI: "redis://localhost:6379",
 		},
 	})
+	viper.SetDefault("Client.LogFile", clntLogFile)
 	if err := os.MkdirAll(filepath.Dir(filename), 0777); err != nil {
 		return err
 	}

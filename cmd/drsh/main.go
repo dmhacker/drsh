@@ -10,7 +10,6 @@ import (
 	"github.com/dmhacker/drsh/internal/drshconf"
 	"github.com/dmhacker/drsh/internal/drshserver"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 )
 
 var (
@@ -84,45 +83,36 @@ func runConfig(cmd *cobra.Command, args []string) {
 }
 
 func runServe(cmd *cobra.Command, args []string) {
-	// Initialize the logger
-	logger, err := zap.NewDevelopment()
-	if err != nil {
-		er(err)
-	}
-	defer logger.Sync()
-	sugar := logger.Sugar()
-
-	// Read the config file
 	cfg := drshconf.Config{}
 	if err := drshconf.ReadConfig(cfgFilename, &cfg); err != nil {
 		er(err)
 	}
 
-	// Start the server
+	logger := drshconf.NewLogger("server", &cfg)
+	defer logger.Sync()
+	sugar := logger.Sugar()
+
 	serv, err := drshserver.NewServer(cfg.Server.Hostname, cfg.Server.RedisURI, sugar)
 	if err != nil {
 		er(err)
 	}
 	defer serv.Close()
 	serv.Start()
+
 	sugar.Infof("Started server '%s' with uid %d", cfg.Server.Hostname, syscall.Getuid())
+	fmt.Printf("The server has been started. Logs are kept at %s.\n", cfg.Server.LogFile)
 	<-make(chan bool)
 }
 
 func newClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client {
-	// Initialize the logger
-	logger, err := zap.NewDevelopment()
-	if err != nil {
-		er(err)
-	}
-	defer logger.Sync()
-	sugar := logger.Sugar()
-
-	// Read in config file and fetch aliases
 	cfg := drshconf.Config{}
 	if err := drshconf.ReadConfig(cfgFilename, &cfg); err != nil {
 		er(err)
 	}
+
+	logger := drshconf.NewLogger("client", &cfg)
+	defer logger.Sync()
+	sugar := logger.Sugar()
 
 	// Try to resolve alias
 	command := os.Args[2]
@@ -135,7 +125,6 @@ func newClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client 
 			break
 		}
 	}
-
 	// If command matches no alias, then interpret it using raw format
 	if !selected {
 		components := strings.Split(command, "@")
@@ -149,12 +138,13 @@ func newClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client 
 		}
 	}
 
-	// Return the client
 	clnt, err := drshclient.NewClient(selection.Username, selection.Hostname, selection.RedisURI, sugar)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+
+	sugar.Infof("Started client with connection to %s@%s", selection.Username, selection.Hostname)
 	return clnt
 }
 
