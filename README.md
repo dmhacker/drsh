@@ -39,8 +39,7 @@ drsh config
 ### Configuration
 
 Both servers and clients on the same machine use only one config located
-at `$XDG_CONFIG_HOME/drsh/config.yml`. For the majority of users, this
-will expand to `$HOME/.config/drsh/config.yml`.
+at `$HOME/.drsh/config.yml`. This location can be changed using the `--config` option.
 
 The config is structured in two parts, a server section and a client section.
 
@@ -72,14 +71,21 @@ Use the `-h` flag for help.
 Connecting to a server is also simple.
 
 ```
-drsh connect {ALIAS|USER@HOST@URI}
+drsh login {ALIAS|USER@HOST@URI}
 ```
 
 For example, with the default config, the following commands are equivalent.
 
 ```
-drsh connect $USER-$HOST
-drsh connect $USER@$HOST@redis://localhost:6379
+drsh login $USER-$HOST
+drsh login $USER@$HOST@redis://localhost:6379
+```
+
+Additionally, files can be uploaded to and downloaded from the server.
+
+```
+drsh upload {ALIAS|USER@HOST@URI} {LOCAL_FILE} {REMOTE_FILE}
+drsh download {ALIAS|USER@HOST@URI} {REMOTE_FILE} {LOCAL_FILE}
 ```
 
 There is also a ping command that measures the latency between a client and

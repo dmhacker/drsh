@@ -35,30 +35,16 @@ func DefaultConfigFilename() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if len(configHome) == 0 {
-		configHome = filepath.Join(home, ".config")
-	}
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(configHome, "drsh", "config.yml"), nil
+	return filepath.Join(home, ".drsh", "config.yml"), nil
 }
 
 // DefaultLogFilename returns the default location of a log file on the user's system.
-func DefaultLogFilename(hostType string) (string, error) {
+func DefaultLogFilename(logName string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if len(configHome) == 0 {
-		configHome = filepath.Join(home, ".config")
-	}
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(configHome, "drsh", "logs", hostType+".log"), nil
+	return filepath.Join(home, ".drsh", "logs", logName+".log"), nil
 }
 
 // WriteDefaultConfig will write a default config if one does not exist already.
