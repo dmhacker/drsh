@@ -221,7 +221,6 @@ func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
 				}
 				break
 			}
-			fmt.Println("Sending packet ...")
 			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
 				Type:        drshproto.Message_FILE_UPLOAD,
 				Sender:      clnt.Host.Hostname,
