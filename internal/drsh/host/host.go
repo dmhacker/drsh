@@ -20,15 +20,15 @@ type outgoingMessage struct {
 	killFlag       bool
 }
 
-// RedisHost is a wrapper around Redis that only uses Redis as a message broker.
+// A wrapper around Redis that only uses Redis as a message broker.
 // It tries to hide the full functionality of Redis by only exposing functions
 // related to sending and receiving drsh messages.
 type RedisHost struct {
 	Hostname                string                        // The name of this host (e.g. what channel this host is listening on)
 	Logger                  *zap.SugaredLogger            // The logger attached to this host
 	Encryption              drshutil.EncryptionModule     // Responsible for performing key exchange, symmetric encryption, etc.
-	IncomingPublicMessages  chan drshproto.PublicMessage  // If not in a session, then any incoming messages can be read through this channel
-	IncomingSessionMessages chan drshproto.SessionMessage // If in a session, then any incoming messages can be read through this channel
+	incomingPublicMessages  chan drshproto.PublicMessage  // If not in a session, then any incoming messages can be read through this channel
+	incomingSessionMessages chan drshproto.SessionMessage // If in a session, then any incoming messages can be read through this channel
 	outgoingMessages        chan outgoingMessage          // Any messages sent through this channel are sent to other Redis hosts
 	rclient                 *redis.Client                 // The Redis client attached to this host
 	rpubsub                 *redis.PubSub                 // The Redis channel the client is listening on
@@ -42,7 +42,7 @@ type RedisHost struct {
 
 var ctx = context.Background()
 
-// NewRedisHost creates a new Redis host. The host will connect as `hostname` to the Redis
+// Creates a new Redis host. The host will connect as `hostname` to the Redis
 // node at `uri` and will subscribe to the channel "drsh:`hostname`". Although
 // the host is connected, it is not actively processing messages at this point.
 func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger) (*RedisHost, error) {
@@ -57,8 +57,8 @@ func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger) (*Redi
 		Hostname:                hostname,
 		Logger:                  logger,
 		Encryption:              drshutil.NewEncryptionModule(),
-		IncomingPublicMessages:  make(chan drshproto.PublicMessage, 10),
-		IncomingSessionMessages: make(chan drshproto.SessionMessage, 10),
+		incomingPublicMessages:  make(chan drshproto.PublicMessage, 10),
+		incomingSessionMessages: make(chan drshproto.SessionMessage, 10),
 		outgoingMessages:        make(chan outgoingMessage, 10),
 		rclient:                 redis.NewClient(opt),
 		readyFlag:               false,
@@ -78,10 +78,10 @@ func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger) (*Redi
 	return &host, nil
 }
 
-// NewChildRedisHost is a niche method that is used by a server session to create a host
+// A niche method that is used by a server session to create a host
 // using the parent server's existing connection. This host shares the parent's connection
 // resources, but doesn't own them. This is mainly used by the server for spawning new sessions.
-func NewInheritedRedisHost(hostname string, parent *RedisHost) (*RedisHost, error) {
+func NewChildRedisHost(hostname string, parent *RedisHost) (*RedisHost, error) {
 	if hostname == "" {
 		return nil, fmt.Errorf("hostname cannot be empty")
 	}
@@ -89,8 +89,8 @@ func NewInheritedRedisHost(hostname string, parent *RedisHost) (*RedisHost, erro
 		Hostname:                hostname,
 		Logger:                  parent.Logger,
 		Encryption:              drshutil.NewEncryptionModule(),
-		IncomingPublicMessages:  make(chan drshproto.PublicMessage, 10),
-		IncomingSessionMessages: make(chan drshproto.SessionMessage, 10),
+		incomingPublicMessages:  make(chan drshproto.PublicMessage, 10),
+		incomingSessionMessages: make(chan drshproto.SessionMessage, 10),
 		outgoingMessages:        make(chan outgoingMessage, 10),
 		rclient:                 parent.rclient,
 		readyFlag:               false,
@@ -169,6 +169,7 @@ func (host *RedisHost) SendSessionMessage(recipient string, msg drshproto.Sessio
 	}
 }
 
+
 func (host *RedisHost) startMessageSender() {
 	for omsg := range host.outgoingMessages {
 		var payload []byte
@@ -241,7 +242,7 @@ func (host *RedisHost) startMessageReceiver() {
 				host.readyMtx.Unlock()
 				continue
 			}
-			host.IncomingSessionMessages <- msg
+			host.incomingSessionMessages <- msg
 		} else {
 			msg := drshproto.PublicMessage{}
 			err = proto.Unmarshal(payload, &msg)
@@ -256,7 +257,7 @@ func (host *RedisHost) startMessageReceiver() {
 				host.readyMtx.Unlock()
 				continue
 			}
-			host.IncomingPublicMessages <- msg
+			host.incomingPublicMessages <- msg
 		}
 	}
 }
@@ -320,4 +321,8 @@ func (host *RedisHost) Close() {
 	if !host.childFlag {
 		host.rclient.Close()
 	}
+    // Closes all channels
+    close(host.outgoingMessages)
+    close(host.incomingPublicMessages)
+    close(host.incomingSessionMessages)
 }

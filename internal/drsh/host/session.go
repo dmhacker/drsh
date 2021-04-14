@@ -15,25 +15,23 @@ import (
 	"github.com/creack/pty"
 	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
 	drshutil "github.com/dmhacker/drsh/internal/drsh/util"
-	"go.uber.org/zap"
 )
 
-// Session represents the server's view of the connection between it and the client.
+// Represents the server's view of the connection between it and the client.
 // Every session between a server and a client is considered unique. The session piggybacks
 // off of the server's own Redis connection so that not as much TCP state has to be maintained.
 // In many ways, a session is analogous to an encrypted tunnel in SSH, as the session can only
 // be created after a successful key exchange occurring in a handshake. Every session also
 // maintains its own pseudoterminal that is controlled by the client.
 type Session struct {
-	Mode                 drshproto.Message_SessionMode
 	Host                 *RedisHost
-	Pty                  *os.File
-	Logger               *zap.SugaredLogger
-	ClientHostname       string
-	Resized              bool
-	LastMessageMutex     sync.Mutex
-	LastMessageTimestamp time.Time
-	TransferFile         *os.File
+	mode                 drshproto.SessionMode
+	clientHostname       string
+	ptyFile              *os.File
+	ptyResizeFlag        bool
+	transferFile         *os.File
+	lastMessageMutex     sync.Mutex
+	lastMessageTimestamp time.Time
 }
 
 func userShell(username string) (*exec.Cmd, error) {
@@ -59,11 +57,11 @@ func userShell(username string) (*exec.Cmd, error) {
 	return exec.Command("sudo", "-u", username, shell, "-l"), nil
 }
 
-// NewSessionFromHandshake creates a session given that the server has received a handshake
+// Creates a session given that the server has received a handshake
 // request packet with necessary information like a client's public key and target username.
 // It sets up the Redis host, subscribes to the proper channel, assigns a name to the session,
 // sets up encryption, and initializes the client's interactive pseudoterminal.
-func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username string, mode drshproto.Message_SessionMode, filename string) (*Session, error) {
+func NewSession(serv *Server, clnt string, keyPart []byte, mode drshproto.SessionMode, username string, filename string) (*Session, error) {
 	// Initialize pseudoterminal
 	cmd, err := userShell(username)
 	if err != nil {
@@ -98,17 +96,17 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 
 	// Open file for uploading, downloading depending on mode
 	var transferFile *os.File
-	if mode == drshproto.Message_MODE_FILE_UPLOAD {
+	if mode == drshproto.SessionMode_MODE_FILE_UPLOAD {
 		transferFile, err = os.Create(adjustedFilename)
 		if err != nil {
 			return nil, err
 		}
-	} else if mode == drshproto.Message_MODE_FILE_DOWNLOAD {
+	} else if mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
 		transferFile, err = os.Open(adjustedFilename)
 		if err != nil {
 			return nil, err
 		}
-	} else if mode == drshproto.Message_MODE_TERMINAL {
+	} else if mode == drshproto.SessionMode_MODE_PTY {
 		transferFile = nil
 	} else {
 		return nil, fmt.Errorf("invalid session mode")
@@ -116,13 +114,12 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 
 	// Initialize session
 	session := Session{
-		Mode:                 mode,
-		ClientHostname:       clnt,
-		Pty:                  ptmx,
-		Logger:               serv.Logger,
-		Resized:              false,
-		LastMessageTimestamp: time.Now(),
-		TransferFile:         transferFile,
+		mode:                 mode,
+		clientHostname:       clnt,
+		ptyFile:              ptmx,
+		ptyResizeFlag:        false,
+		transferFile:         transferFile,
+		lastMessageTimestamp: time.Now(),
 	}
 
 	// Set up session properties & Redis connection
@@ -130,58 +127,61 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 	if err != nil {
 		return nil, err
 	}
-	session.Host, err = NewInheritedRedisHost("ss-"+name, serv.Host.Rdb, serv.Logger, session.handleMessage)
+	session.Host, err = NewChildRedisHost("ss-"+name, serv.Host)
 	if err != nil {
 		return nil, err
 	}
 
 	// Set up shared key through key exchange
-	err = session.Host.PrepareKeyExchange()
+	err = session.Host.Encryption.PrepareKeyExchange()
 	if err != nil {
 		return nil, err
 	}
-	err = session.Host.CompleteKeyExchange(key)
+	err = session.Host.Encryption.CompleteKeyExchange(keyPart)
 	if err != nil {
 		return nil, err
 	}
+
+	// Indicate that this session will only be using encrypted session messages
+	session.Host.SetSession(true)
 
 	return &session, nil
 }
 
 func (session *Session) refreshExpiry() {
-	session.LastMessageMutex.Lock()
-	defer session.LastMessageMutex.Unlock()
-	session.LastMessageTimestamp = time.Now()
+	session.lastMessageMutex.Lock()
+	defer session.lastMessageMutex.Unlock()
+	session.lastMessageTimestamp = time.Now()
 }
 
 func (session *Session) isExpired() bool {
-	session.LastMessageMutex.Lock()
-	defer session.LastMessageMutex.Unlock()
-	return time.Now().Sub(session.LastMessageTimestamp).Minutes() >= 5
+	session.lastMessageMutex.Lock()
+	defer session.lastMessageMutex.Unlock()
+	return time.Now().Sub(session.lastMessageTimestamp).Minutes() >= 5
 }
 
 func (session *Session) handleHeartbeat() {
-	session.Host.SendMessage(session.ClientHostname, drshproto.Message{
-		Type:   drshproto.Message_HEARTBEAT_RESPONSE,
+	session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
+		Type:   drshproto.SessionMessage_HEARTBEAT_SERVER,
 		Sender: session.Host.Hostname,
 	})
 }
 
 func (session *Session) handlePtyInput(payload []byte) {
-	if session.Mode != drshproto.Message_MODE_TERMINAL {
+	if session.mode != drshproto.SessionMode_MODE_PTY {
 		return
 	}
-	_, err := session.Pty.Write(payload)
+	_, err := session.ptyFile.Write(payload)
 	if err != nil {
 		session.handleExit(err, true)
 	}
 }
 
 func (session *Session) handlePtyWinch(rows uint16, cols uint16, xpixels uint16, ypixels uint16) {
-	if session.Mode != drshproto.Message_MODE_TERMINAL {
+	if session.mode != drshproto.SessionMode_MODE_PTY {
 		return
 	}
-	pty.Setsize(session.Pty, &pty.Winsize{
+	pty.Setsize(session.ptyFile, &pty.Winsize{
 		Rows: rows,
 		Cols: cols,
 		X:    xpixels,
@@ -189,64 +189,66 @@ func (session *Session) handlePtyWinch(rows uint16, cols uint16, xpixels uint16,
 	})
 	// The session only begins broadcasting output after it has received initial terminal dimensions from the client.
 	// This has to be done so the output sent between the handshake and initial winch does not appear mangled.
-	if !session.Resized {
+	if !session.ptyResizeFlag {
 		go session.startPtyOutputHandler()
 	}
-	session.Resized = true
+	session.ptyResizeFlag = true
 }
 
-func (session *Session) handleFileUpload(payload []byte) {
-	if session.Mode == drshproto.Message_MODE_FILE_UPLOAD && session.TransferFile != nil {
-		_, err := session.TransferFile.Write(payload)
+func (session *Session) handleFileTransfer(payload []byte) {
+	if session.mode == drshproto.SessionMode_MODE_FILE_UPLOAD && session.transferFile != nil {
+		_, err := session.transferFile.Write(payload)
 		if err != nil {
 			session.handleExit(err, true)
 		}
 	}
 }
 
-func (session *Session) handleFileUploadFinish() {
-	if session.Mode == drshproto.Message_MODE_FILE_UPLOAD && session.TransferFile != nil {
+func (session *Session) handleFileTransferFinish() {
+	if session.mode == drshproto.SessionMode_MODE_FILE_UPLOAD && session.transferFile != nil {
 		session.handleExit(nil, true)
 	}
 }
 
 func (session *Session) handleExit(err error, ack bool) {
 	if err != nil {
-		session.Logger.Infof("'%s' has left session %s: %s.", session.ClientHostname, session.Host.Hostname, err.Error())
+		session.Host.Logger.Infof("'%s' has left session %s: %s.", session.clientHostname, session.Host.Hostname, err.Error())
 	} else {
-		session.Logger.Infof("'%s' has left session %s.", session.ClientHostname, session.Host.Hostname)
+		session.Host.Logger.Infof("'%s' has left session %s.", session.clientHostname, session.Host.Hostname)
 	}
 	if ack {
-		session.Host.SendMessage(session.ClientHostname, drshproto.Message{
-			Type:   drshproto.Message_EXIT,
+		session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
+			Type:   drshproto.SessionMessage_EXIT,
 			Sender: session.Host.Hostname,
 		})
 	}
 	session.Close()
 }
 
-func (session *Session) handleMessage(msg drshproto.Message) {
-	if msg.GetSender() != session.ClientHostname {
-		session.Logger.Warnf("Invalid participant '%s' in session %s.", msg.GetSender(), session.Host.Hostname)
-		return
-	}
-	session.refreshExpiry()
-	switch msg.GetType() {
-	case drshproto.Message_HEARTBEAT_REQUEST:
-		session.handleHeartbeat()
-	case drshproto.Message_PTY_INPUT:
-		session.handlePtyInput(msg.GetPtyPayload())
-	case drshproto.Message_PTY_WINCH:
-		dims := drshutil.Unpack64(msg.GetPtyDimensions())
-		session.handlePtyWinch(dims[0], dims[1], dims[2], dims[3])
-	case drshproto.Message_FILE_UPLOAD:
-		session.handleFileUpload(msg.GetFilePayload())
-	case drshproto.Message_FILE_UPLOAD_FINISH:
-		session.handleFileUploadFinish()
-	case drshproto.Message_EXIT:
-		session.handleExit(nil, false)
-	default:
-		session.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
+func (session *Session) startMessageHandler() {
+	for msg := range session.Host.incomingSessionMessages {
+		if msg.GetSender() != session.clientHostname {
+			session.Host.Logger.Warnf("Invalid participant '%s' in session %s.", msg.GetSender(), session.Host.Hostname)
+			return
+		}
+		session.refreshExpiry()
+		switch msg.GetType() {
+		case drshproto.SessionMessage_HEARTBEAT_CLIENT:
+			session.handleHeartbeat()
+		case drshproto.SessionMessage_PTY_INPUT:
+			session.handlePtyInput(msg.GetPtyPayload())
+		case drshproto.SessionMessage_PTY_WINCH:
+			dims := drshutil.Unpack64(msg.GetPtyDimensions())
+			session.handlePtyWinch(dims[0], dims[1], dims[2], dims[3])
+		case drshproto.SessionMessage_FILE_TRANSFER:
+			session.handleFileTransfer(msg.GetFilePayload())
+		case drshproto.SessionMessage_FILE_TRANSFER_FINISH:
+			session.handleFileTransferFinish()
+		case drshproto.SessionMessage_EXIT:
+			session.handleExit(nil, false)
+		default:
+			session.Host.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
+		}
 	}
 }
 
@@ -256,13 +258,13 @@ func (session *Session) startPtyOutputHandler() {
 			break
 		}
 		buf := make([]byte, 4096)
-		cnt, err := session.Pty.Read(buf)
+		cnt, err := session.ptyFile.Read(buf)
 		if err != nil {
 			session.handleExit(err, true)
 			break
 		}
-		session.Host.SendMessage(session.ClientHostname, drshproto.Message{
-			Type:       drshproto.Message_PTY_OUTPUT,
+		session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
+			Type:       drshproto.SessionMessage_PTY_OUTPUT,
 			Sender:     session.Host.Hostname,
 			PtyPayload: buf[:cnt],
 		})
@@ -277,20 +279,20 @@ func (session *Session) startPtyOutputHandler() {
 func (session *Session) startFileDownloadHandler() {
 	for {
 		buf := make([]byte, 4096)
-		cnt, err := session.TransferFile.Read(buf)
+		cnt, err := session.transferFile.Read(buf)
 		if err != nil {
 			if err != io.EOF {
 				session.handleExit(err, true)
 			} else {
-				session.Host.SendMessage(session.ClientHostname, drshproto.Message{
-					Type:   drshproto.Message_FILE_DOWNLOAD_FINISH,
+				session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
+					Type:   drshproto.SessionMessage_FILE_TRANSFER_FINISH,
 					Sender: session.Host.Hostname,
 				})
 			}
 			break
 		}
-		session.Host.SendMessage(session.ClientHostname, drshproto.Message{
-			Type:        drshproto.Message_FILE_DOWNLOAD,
+		session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
+			Type:        drshproto.SessionMessage_FILE_TRANSFER,
 			Sender:      session.Host.Hostname,
 			FilePayload: buf[:cnt],
 		})
@@ -309,20 +311,21 @@ func (session *Session) startTimeoutHandler() {
 	}
 }
 
-// Start is a non-blocking function that enables session packet processing.
+// Non-blocking function that enables session packet processing.
 func (session *Session) Start() {
+	go session.startMessageHandler()
 	go session.startTimeoutHandler()
-	if session.Mode == drshproto.Message_MODE_FILE_DOWNLOAD {
+	session.Host.Start()
+	if session.mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
 		go session.startFileDownloadHandler()
 	}
-	session.Host.Start()
 }
 
-// Close is called to perform session cleanup but does not destroy the Redis connection.
+// Performs session cleanup but does not destroy the Redis connection.
 func (session *Session) Close() {
-	session.Pty.Close()
+	session.ptyFile.Close()
 	session.Host.Close()
-	if session.TransferFile != nil {
-		session.TransferFile.Close()
+	if session.transferFile != nil {
+		session.transferFile.Close()
 	}
 }

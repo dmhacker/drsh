@@ -27,12 +27,12 @@ message PublicMessage {
   // Session messages
   bytes session_key_part = 3; // Sent by both C&S to establish a shared key
   SessionMode session_mode = 4; // Client requests that the session be of this mode
-  string handshake_user = 5; // Client requests that the session be tied to this user account
-  string handshake_filename = 6; // Client requests that the session prepare this remote file for transfer
+  string session_user = 5; // Client requests that the session be tied to this user account
+  string session_filename = 6; // Client requests that the session prepare this remote file for transfer
   bool session_created = 7; // Server indicates whether or not a session was created
   string session_error = 8; // Server can optionally provide a error explaining why session cannot be created
   string session_id = 9; // Server provides a valid session ID if one was created
-  string handshake_motd = 10; // Server provides a MOTD to be displayed to the client
+  string session_motd = 10; // Server provides a MOTD to be displayed to the client
 }
 
 // An EncryptedMessage represents some ciphertext transferred between server and client. This

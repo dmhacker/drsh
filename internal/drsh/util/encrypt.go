@@ -17,7 +17,7 @@ import (
 // with key exchange & symmetric encryption capabilities
 type EncryptionModule struct {
 	group      *dhkx.DHGroup
-	privateKey *dhkx.DHKey
+	PrivateKey *dhkx.DHKey
 	cipher     cipher.AEAD
 }
 
@@ -36,7 +36,7 @@ func (em *EncryptionModule) PrepareKeyExchange() error {
 		return err
 	}
 	em.group = grp
-	em.privateKey = priv
+	em.PrivateKey = priv
 	return nil
 }
 
@@ -46,7 +46,7 @@ func (em *EncryptionModule) PrepareKeyExchange() error {
 // creates a shared secret, passed through a KDF and given to a cipher.
 func (em *EncryptionModule) CompleteKeyExchange(key []byte) error {
 	pub := dhkx.NewPublicKey(key)
-	secret, err := em.group.ComputeKey(pub, em.privateKey)
+	secret, err := em.group.ComputeKey(pub, em.PrivateKey)
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func (em *EncryptionModule) CompleteKeyExchange(key []byte) error {
 // be garbage collected.
 func (em *EncryptionModule) FreePrivateKeys() {
 	em.group = nil
-	em.privateKey = nil
+	em.PrivateKey = nil
 }
 
 // Encrypt a message with the key formed during the key exchange process.
