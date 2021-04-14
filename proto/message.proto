@@ -48,14 +48,15 @@ message EncryptedMessage {
 // transferring files, sending commands to a server as a user, etc.
 message SessionMessage {
   enum MessageType {
-    EXIT = 0; // C->S, S->C, sent by either party to indicate session is closed
-    HEARTBEAT_CLIENT = 1; // C->S, empty message to signal that client is still active
-    HEARTBEAT_SERVER = 2; // S->C, empty message to signal that server is still active
-    PTY_INPUT = 3; // C->S, client is sending commands to the server's PTY
-    PTY_WINCH = 4; // C->S, client wants to adjust the size of the server's PTY 
-    PTY_OUTPUT = 5; // S->C, server is sending output from its PTY
-    FILE_TRANSFER = 6; // S->C, C->S, the party sending a file uses this message to transfer data
-    FILE_TRANSFER_FINISH = 7; // S->C, C->S, the party sending a file indicates that they are done
+    READY = 0; // C->C, S->S, used to test that Redis is delivering messages
+    EXIT = 1; // C->S, S->C, sent by either party to indicate session is closed
+    HEARTBEAT_CLIENT = 2; // C->S, empty message to signal that client is still active
+    HEARTBEAT_SERVER = 3; // S->C, empty message to signal that server is still active
+    PTY_INPUT = 4; // C->S, client is sending commands to the server's PTY
+    PTY_WINCH = 5; // C->S, client wants to adjust the size of the server's PTY 
+    PTY_OUTPUT = 6; // S->C, server is sending output from its PTY
+    FILE_TRANSFER = 7; // S->C, C->S, the party sending a file uses this message to transfer data
+    FILE_TRANSFER_FINISH = 8; // S->C, C->S, the party sending a file indicates that they are done
   }
   // All messages
   MessageType type = 1;
