@@ -128,6 +128,12 @@ func (clnt *Client) handleFileDownload(sender string, payload []byte) {
 	}
 }
 
+func (clnt *Client) handleFileDownloadFinish(sender string) {
+	if clnt.ConnectedState && sender == clnt.ConnectedSession && clnt.TransferFile != nil {
+		clnt.handleExit(nil, true)
+	}
+}
+
 func (clnt *Client) handleExit(err error, ack bool) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -163,6 +169,8 @@ func (clnt *Client) handleMessage(msg drshproto.Message) {
 		clnt.handlePtyOutput(msg.GetSender(), msg.GetPtyPayload())
 	case drshproto.Message_FILE_DOWNLOAD:
 		clnt.handleFileDownload(msg.GetSender(), msg.GetFilePayload())
+	case drshproto.Message_FILE_DOWNLOAD_FINISH:
+		clnt.handleFileDownloadFinish(msg.GetSender())
 	case drshproto.Message_EXIT:
 		clnt.handleExit(nil, false)
 	default:
@@ -216,8 +224,10 @@ func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
 				if err != io.EOF {
 					clnt.handleExit(err, true)
 				} else {
-					fmt.Printf("File '%s' was uploaded to '%s@%s:%s'.\n", localFilename, clnt.RemoteUsername, clnt.RawHostname, remoteFilename)
-					clnt.handleExit(nil, true)
+					clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
+						Type:   drshproto.Message_FILE_UPLOAD_FINISH,
+						Sender: clnt.Host.Hostname,
+					})
 				}
 				break
 			}
@@ -228,8 +238,9 @@ func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
 			})
 		}
 	})()
-	// Finished channel will be triggered on error or client exit due to completion
+	// Finished channel will be triggered on error or by the server due to completion
 	<-clnt.Finished
+	fmt.Printf("File '%s' was uploaded to '%s@%s' as '%s'.\n", localFilename, clnt.RemoteUsername, clnt.RawHostname, remoteFilename)
 }
 
 // DownloadFile downloads a file from the remote server.
@@ -247,6 +258,7 @@ func (clnt *Client) DownloadFile(remoteFilename string, localFilename string) {
 	clnt.connect(drshproto.Message_MODE_FILE_DOWNLOAD, remoteFilename)
 	// Finished channel will be triggered on error or server exit due to completion
 	<-clnt.Finished
+	fmt.Printf("File '%s' was downloaded from '%s@%s' to '%s'.\n", remoteFilename, clnt.RemoteUsername, clnt.RawHostname, localFilename)
 }
 
 // LoginInteractively is a blocking function that facilitates an interactive session with its server.

@@ -204,6 +204,12 @@ func (session *Session) handleFileUpload(payload []byte) {
 	}
 }
 
+func (session *Session) handleFileUploadFinish() {
+	if session.Mode == drshproto.Message_MODE_FILE_UPLOAD && session.TransferFile != nil {
+		session.handleExit(nil, true)
+	}
+}
+
 func (session *Session) handleExit(err error, ack bool) {
 	if err != nil {
 		session.Logger.Infof("'%s' has left session %s: %s.", session.ClientHostname, session.Host.Hostname, err.Error())
@@ -235,6 +241,8 @@ func (session *Session) handleMessage(msg drshproto.Message) {
 		session.handlePtyWinch(dims[0], dims[1], dims[2], dims[3])
 	case drshproto.Message_FILE_UPLOAD:
 		session.handleFileUpload(msg.GetFilePayload())
+	case drshproto.Message_FILE_UPLOAD_FINISH:
+		session.handleFileUploadFinish()
 	case drshproto.Message_EXIT:
 		session.handleExit(nil, false)
 	default:
@@ -274,7 +282,10 @@ func (session *Session) startFileDownloadHandler() {
 			if err != io.EOF {
 				session.handleExit(err, true)
 			} else {
-				session.handleExit(nil, true)
+				session.Host.SendMessage(session.ClientHostname, drshproto.Message{
+					Type:   drshproto.Message_FILE_DOWNLOAD_FINISH,
+					Sender: session.Host.Hostname,
+				})
 			}
 			break
 		}
