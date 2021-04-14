@@ -3,57 +3,69 @@ package drsh.proto;
 
 option go_package = "./internal/drsh/proto";
 
-message Message {
+enum SessionMode {
+  MODE_PTY = 0;
+  MODE_FILE_UPLOAD = 1;
+  MODE_FILE_DOWNLOAD = 2;
+}
+
+// A PublicMessage is sent without encryption between any server and client.
+// They are essentially ephmereal messages that require minimal or no state to be kept on the server.
+// Note that anyone on the Internet can sniff these messages, so no sensitive information should
+// be transferred here.
+message PublicMessage {
   enum MessageType {
-    // Sent to self
-    READY = 0;
-    // Sent to opposing party
-    EXIT = 1;
-    // Server-bound
-    PING_REQUEST = 2;
-    HEARTBEAT_REQUEST = 3;
-    HANDSHAKE_REQUEST = 4;
-    PTY_INPUT = 5;
-    PTY_WINCH = 6;
-    FILE_UPLOAD = 7;
-    FILE_UPLOAD_FINISH = 8;
-    // Client-bound
-    PING_RESPONSE = 9;
-    HEARTBEAT_RESPONSE = 10;
-    HANDSHAKE_RESPONSE = 11;
-    PTY_OUTPUT = 12;
-    FILE_DOWNLOAD = 13;
-    FILE_DOWNLOAD_FINISH = 14;
+    READY = 0; // C->C, S->S, used to test that Redis is delivering messages
+    PING_REQUEST = 1; // C->S, client wants to check if the server is active
+    PING_RESPONSE = 2; // S->C, server responds to the client that it is active
+    SESSION_REQUEST = 3; // C->S, client wants to establish an encrypted session with the server
+    SESSION_RESPONSE = 4; // S->C, server responds if it is able to set up a session
   }
-
-  enum SessionMode {
-    MODE_TERMINAL = 0;
-    MODE_FILE_UPLOAD = 1;
-    MODE_FILE_DOWNLOAD = 2;
-  }
-
   // All messages
   MessageType type = 1;
   string sender = 2;
-
-  // PTY messages
-  bytes pty_payload = 3;
-  uint64 pty_dimensions = 4;
-
-  // Handshake messages
-  bytes handshake_key = 5;
-  bool handshake_success = 7;
-  string handshake_session = 8;
-  string handshake_user = 9;
-  string handshake_motd = 10;
-  SessionMode handshake_mode = 11;
-  string handshake_filename = 12;
-
-  // File messages
-  bytes file_payload = 13;
+  // Session messages
+  bytes session_key_part = 3; // Sent by both C&S to establish a shared key
+  SessionMode session_mode = 4; // Client requests that the session be of this mode
+  string handshake_user = 5; // Client requests that the session be tied to this user account
+  string handshake_filename = 6; // Client requests that the session prepare this remote file for transfer
+  bool session_created = 7; // Server indicates whether or not a session was created
+  string session_error = 8; // Server can optionally provide a error explaining why session cannot be created
+  string session_id = 9; // Server provides a valid session ID if one was created
+  string handshake_motd = 10; // Server provides a MOTD to be displayed to the client
 }
 
+// An EncryptedMessage represents some ciphertext transferred between server and client. This
+// is mainly intended for protecting sessions.
 message EncryptedMessage {
   bytes ciphertext = 1;
   bytes nonce = 2;
+}
+
+// A SessionMessage is sent with encryption between a server session and corresponding client.
+// The SessionMessage doesn't carry any encryption parameters itself; instead, it's assumed to be wrapped in
+// an EncryptedMessage. SessionMessages implement core logic associated with client actions, such as
+// transferring files, sending commands to a server as a user, etc.
+message SessionMessage {
+  enum MessageType {
+    EXIT = 0; // C->S, S->C, sent by either party to indicate session is closed
+    HEARTBEAT_CLIENT = 1; // C->S, empty message to signal that client is still active
+    HEARTBEAT_SERVER = 2; // S->C, empty message to signal that server is still active
+    PTY_INPUT = 3; // C->S, client is sending commands to the server's PTY
+    PTY_WINCH = 4; // C->S, client wants to adjust the size of the server's PTY 
+    PTY_OUTPUT = 5; // S->C, server is sending output from its PTY
+    FILE_TRANSFER = 6; // S->C, C->S, the party sending a file uses this message to transfer data
+    FILE_TRANSFER_FINISH = 7; // S->C, C->S, the party sending a file indicates that they are done
+  }
+  // All messages
+  MessageType type = 1;
+  string sender = 2;
+  // Exit messages
+  bool exit_normal = 3; // Sending party specifies if they are exiting normally
+  string exit_error = 4; // Sending party specifies that they are exiting because of an error
+  // PTY messages
+  bytes pty_payload = 5; // used by PTY_INPUT, PTY_OUTPUT messages
+  uint64 pty_dimensions = 6; // used by PTY_WINCH message
+  // File messages
+  bytes file_payload = 13; // used by FILE_TRANSFER message
 }
