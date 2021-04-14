@@ -234,6 +234,7 @@ func (session *Session) handleMessage(msg drshproto.Message) {
 		dims := drshutil.Unpack64(msg.GetPtyDimensions())
 		session.handlePtyWinch(dims[0], dims[1], dims[2], dims[3])
 	case drshproto.Message_FILE_UPLOAD:
+		session.Logger.Infof("Received file upload packet: %v", msg)
 		session.handleFileUpload(msg.GetFilePayload())
 	case drshproto.Message_EXIT:
 		session.handleExit(nil, false)
