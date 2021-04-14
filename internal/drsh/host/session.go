@@ -1,4 +1,4 @@
-package drshserver
+package host
 
 import (
 	"fmt"
@@ -13,9 +13,8 @@ import (
 
 	"github.com/astromechza/etcpwdparse"
 	"github.com/creack/pty"
-	"github.com/dmhacker/drsh/internal/drshhost"
-	"github.com/dmhacker/drsh/internal/drshproto"
-	"github.com/dmhacker/drsh/internal/drshutil"
+	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
+	drshutil "github.com/dmhacker/drsh/internal/drsh/util"
 	"go.uber.org/zap"
 )
 
@@ -27,7 +26,7 @@ import (
 // maintains its own pseudoterminal that is controlled by the client.
 type Session struct {
 	Mode                 drshproto.Message_SessionMode
-	Host                 *drshhost.RedisHost
+	Host                 *RedisHost
 	Pty                  *os.File
 	Logger               *zap.SugaredLogger
 	ClientHostname       string
@@ -131,7 +130,7 @@ func NewSessionFromHandshake(serv *Server, clnt string, key []byte, username str
 	if err != nil {
 		return nil, err
 	}
-	session.Host, err = drshhost.NewInheritedRedisHost("ss-"+name, serv.Host.Rdb, serv.Logger, session.handleMessage)
+	session.Host, err = NewInheritedRedisHost("ss-"+name, serv.Host.Rdb, serv.Logger, session.handleMessage)
 	if err != nil {
 		return nil, err
 	}

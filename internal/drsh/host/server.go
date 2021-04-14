@@ -1,12 +1,10 @@
-package drshserver
+package host
 
 import (
-	"context"
 	"strings"
 
-	"github.com/dmhacker/drsh/internal/drshhost"
-	"github.com/dmhacker/drsh/internal/drshproto"
-	"github.com/dmhacker/drsh/internal/drshutil"
+	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
+	drshutil "github.com/dmhacker/drsh/internal/drsh/util"
 	"go.uber.org/zap"
 )
 
@@ -15,11 +13,9 @@ import (
 // spawn a separate "session" through which all communication is encrypted. Because the session
 // handles most of the connection legwork, the actual server class is fairly light.
 type Server struct {
-	Host   *drshhost.RedisHost
+	Host   *RedisHost
 	Logger *zap.SugaredLogger
 }
-
-var ctx = context.Background()
 
 // NewServer creates a new server and its underlying connection to Redis. It is not actively
 // receiving and sending packets at this point; that is only enabled upon start.
@@ -27,7 +23,7 @@ func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server,
 	serv := Server{
 		Logger: logger,
 	}
-	hst, err := drshhost.NewRedisHost("se-"+hostname, uri, logger, serv.handleMessage)
+	hst, err := NewRedisHost("se-"+hostname, uri, logger, serv.handleMessage)
 	if err != nil {
 		return nil, err
 	}

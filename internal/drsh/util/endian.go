@@ -1,4 +1,4 @@
-package drshutil
+package util
 
 import (
 	"encoding/binary"

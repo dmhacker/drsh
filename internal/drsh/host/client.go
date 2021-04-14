@@ -1,7 +1,6 @@
-package drshclient
+package host
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,9 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dmhacker/drsh/internal/drshhost"
-	"github.com/dmhacker/drsh/internal/drshproto"
-	"github.com/dmhacker/drsh/internal/drshutil"
+	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
+	drshutil "github.com/dmhacker/drsh/internal/drsh/util"
 	"github.com/golang/protobuf/proto"
 	"go.uber.org/zap"
 	"golang.org/x/term"
@@ -27,7 +25,7 @@ type pingResponse struct {
 // Client represents a host on the network who wishes to do something with a specific server,
 // whether this is a file-transfer operation, an interactive session, or a series of pings.
 type Client struct {
-	Host                 *drshhost.RedisHost
+	Host                 *RedisHost
 	Logger               *zap.SugaredLogger
 	RawHostname          string
 	RemoteUsername       string
@@ -42,8 +40,6 @@ type Client struct {
 	TransferFile         *os.File
 	DisplayMotd          bool
 }
-
-var ctx = context.Background()
 
 // NewClient creates a new client and its underlying connection to Redis. It is not actively
 // receiving and sending packets at this point; that is only enabled upon start.
@@ -65,7 +61,7 @@ func NewClient(username string, hostname string, uri string, logger *zap.Sugared
 	if err != nil {
 		return nil, err
 	}
-	clnt.Host, err = drshhost.NewRedisHost("cl-"+name, uri, logger, clnt.handleMessage)
+	clnt.Host, err = NewRedisHost("cl-"+name, uri, logger, clnt.handleMessage)
 	if err != nil {
 		return nil, err
 	}

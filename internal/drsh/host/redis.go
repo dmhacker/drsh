@@ -1,4 +1,4 @@
-package drshhost
+package host
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dmhacker/drsh/internal/drshproto"
+	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang/protobuf/proto"
 	"github.com/monnand/dhkx"

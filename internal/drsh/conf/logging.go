@@ -1,4 +1,4 @@
-package drshconf
+package conf
 
 import (
 	"go.uber.org/zap"

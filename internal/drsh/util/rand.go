@@ -1,7 +1,8 @@
-package drshutil
+package util
 
 import (
 	"encoding/base64"
+
 	"github.com/google/uuid"
 )
 

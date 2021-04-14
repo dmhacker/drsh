@@ -6,9 +6,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/dmhacker/drsh/internal/drshclient"
-	"github.com/dmhacker/drsh/internal/drshconf"
-	"github.com/dmhacker/drsh/internal/drshserver"
+	drshconf "github.com/dmhacker/drsh/internal/drsh/conf"
+	drshhost "github.com/dmhacker/drsh/internal/drsh/host"
 	"github.com/spf13/cobra"
 )
 
@@ -92,7 +91,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	defer logger.Sync()
 	sugar := logger.Sugar()
 
-	serv, err := drshserver.NewServer(cfg.Server.Hostname, cfg.Server.RedisURI, sugar)
+	serv, err := drshhost.NewServer(cfg.Server.Hostname, cfg.Server.RedisURI, sugar)
 	if err != nil {
 		er(err)
 	}
@@ -104,7 +103,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	<-make(chan bool)
 }
 
-func newClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client {
+func newClientFromCommand(cmd *cobra.Command, args []string) *drshhost.Client {
 	cfg := drshconf.Config{}
 	if err := drshconf.ReadConfig(cfgFilename, &cfg); err != nil {
 		er(err)
@@ -138,7 +137,7 @@ func newClientFromCommand(cmd *cobra.Command, args []string) *drshclient.Client 
 		}
 	}
 
-	clnt, err := drshclient.NewClient(selection.Username, selection.Hostname, selection.RedisURI, sugar)
+	clnt, err := drshhost.NewClient(selection.Username, selection.Hostname, selection.RedisURI, sugar)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
