@@ -28,7 +28,7 @@ type Session struct {
 	Host                 *RedisHost
 	mode                 drshproto.SessionMode
 	clientHostname       string
-	servHostname         string
+	server               *Server
 	lastMessageMutex     sync.Mutex
 	lastMessageTimestamp time.Time
 	ptyFile              *os.File
@@ -63,11 +63,11 @@ func userShell(username string) (*exec.Cmd, error) {
 // client's public key and target username.
 // It sets up the Redis host, subscribes to the proper channel, assigns a name to the session,
 // sets up encryption, and initializes the client's interactive pseudoterminal and/or transfer file.
-func NewSession(serv *Server, clnt string, keyPart []byte) (*Session, error) {
+func (serv *Server) NewSession(clientHostname string, keyPart []byte) (*Session, error) {
 	session := Session{
 		mode:                 drshproto.SessionMode_MODE_WAITING,
-		servHostname:         serv.Host.Hostname,
-		clientHostname:       clnt,
+		clientHostname:       clientHostname,
+		server:               serv,
 		lastMessageTimestamp: time.Now(),
 	}
 	// Set up session properties & Redis connection
@@ -198,7 +198,7 @@ func (session *Session) handleBootstrap(mode drshproto.SessionMode, username str
 		session.ptyFile = ptmx
 		session.ptyResizeFlag = false
 		valid = true
-		resp.BootstrapMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(session.servHostname, "se-") + " via drsh.\n"
+		resp.BootstrapMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(session.server.Host.Hostname, "se-") + " via drsh.\n"
 	} else if mode == drshproto.SessionMode_MODE_FILE_UPLOAD || mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
 		// Adjust remote filename to be relative to current user's home directory
 		// filepath.Abs is relative to the working directory, so the WD needs to be temporarily set
@@ -360,6 +360,8 @@ func (session *Session) Start() {
 	session.Host.Start()
 	go session.startMessageHandler()
 	go session.startTimeoutHandler()
+	// Ensure that a server can keep track of all of its sessions
+	session.server.Sessions.Store(session.Host.Hostname, session)
 }
 
 // Performs session cleanup but does not destroy the Redis connection.
@@ -369,4 +371,6 @@ func (session *Session) Close() {
 	if session.transferFile != nil {
 		session.transferFile.Close()
 	}
+	// Make sure closed sessions can be garbage collected
+	session.server.Sessions.Delete(session.Host.Hostname)
 }

@@ -1,8 +1,14 @@
 package host
 
 import (
-	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
+	"fmt"
 	"go.uber.org/zap"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+
+	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
 )
 
 // Represents a host on the network that accepts connections & pings from any clients
@@ -10,7 +16,8 @@ import (
 // spawn a separate "session" through which all communication is encrypted. Because the session
 // handles most of the connection legwork, the actual server class is fairly light.
 type Server struct {
-	Host *RedisHost
+	Host     *RedisHost
+	Sessions sync.Map
 }
 
 // NewServer creates a new server and its underlying connection to Redis. It is not actively
@@ -37,7 +44,7 @@ func (serv *Server) handleSession(sender string, keyPart []byte) {
 		Type:   drshproto.PublicMessage_SESSION_RESPONSE,
 		Sender: serv.Host.Hostname,
 	}
-	session, err := NewSession(serv, sender, keyPart)
+	session, err := serv.NewSession(sender, keyPart)
 	if err != nil {
 		serv.Host.Logger.Warnf("Failed to setup session with '%s': %s", sender, err)
 		resp.SessionCreated = false
@@ -72,8 +79,25 @@ func (serv *Server) startMessageHandler() {
 	}
 }
 
+func (serv *Server) addInterruptHandler() {
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		serv.Sessions.Range(func(key interface{}, value interface{}) bool {
+			session := value.(*Session)
+			if session.Host.IsOpen() {
+				session.handleExit(fmt.Errorf("terminated"), true)
+			}
+			return true
+		})
+		os.Exit(1)
+	}()
+}
+
 // Non-blocking function that enables server message processing.
 func (serv *Server) Start() {
+	serv.addInterruptHandler()
 	serv.Host.Start()
 	go serv.startMessageHandler()
 }
