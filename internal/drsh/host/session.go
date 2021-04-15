@@ -246,28 +246,7 @@ func (session *Session) handleParam(mode drshproto.SessionMode, username string,
 		session.mode = mode
 		session.Host.SendSessionMessage(session.clientHostname, resp)
 		if session.mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
-			go (func() {
-				for {
-					buf := make([]byte, 4096)
-					cnt, err := session.transferFile.Read(buf)
-					if err != nil {
-						if err != io.EOF {
-							session.handleExit(err, true)
-						} else {
-							session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
-								Type:   drshproto.SessionMessage_FILE_TRANSFER_FINISH,
-								Sender: session.Host.Hostname,
-							})
-						}
-						break
-					}
-					session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
-						Type:        drshproto.SessionMessage_FILE_TRANSFER,
-						Sender:      session.Host.Hostname,
-						FilePayload: buf[:cnt],
-					})
-				}
-			})()
+			go session.startFileTransferHandler()
 		}
 	}
 }
@@ -314,6 +293,29 @@ func (session *Session) startMessageHandler() {
 	}
 }
 
+func (session *Session) startFileTransferHandler() {
+	for {
+		buf := make([]byte, 4096)
+		cnt, err := session.transferFile.Read(buf)
+		if err != nil {
+			if err != io.EOF {
+				session.handleExit(err, true)
+			} else {
+				session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
+					Type:   drshproto.SessionMessage_FILE_TRANSFER_FINISH,
+					Sender: session.Host.Hostname,
+				})
+			}
+			break
+		}
+		session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
+			Type:        drshproto.SessionMessage_FILE_TRANSFER,
+			Sender:      session.Host.Hostname,
+			FilePayload: buf[:cnt],
+		})
+	}
+}
+
 func (session *Session) startPtyOutputHandler() {
 	for {
 		if !session.Host.IsOpen() {
@@ -322,7 +324,10 @@ func (session *Session) startPtyOutputHandler() {
 		buf := make([]byte, 4096)
 		cnt, err := session.ptyFile.Read(buf)
 		if err != nil {
-			session.handleExit(err, true)
+			// Most errors with the pty are non-fatal and just occur when the client hangs up the session
+			// They shouldn't actually trigger as an error on the client's side
+			session.Host.Logger.Infof("'%s' has experienced pty error in session %s: %s.", session.clientHostname, session.Host.Hostname, err.Error())
+			session.handleExit(nil, true)
 			break
 		}
 		session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
