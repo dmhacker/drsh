@@ -4,9 +4,10 @@ package drsh.proto;
 option go_package = "./internal/drsh/proto";
 
 enum SessionMode {
-  MODE_PTY = 0;
-  MODE_FILE_UPLOAD = 1;
-  MODE_FILE_DOWNLOAD = 2;
+  MODE_WAITING = 0;
+  MODE_PTY = 1;
+  MODE_FILE_UPLOAD = 2;
+  MODE_FILE_DOWNLOAD = 3;
 }
 
 // Public messages are sent without encryption between any server and client.
@@ -25,13 +26,9 @@ message PublicMessage {
   string sender = 2;
   // Session messages
   bytes session_key_part = 3; // Sent by both C&S to establish a shared key
-  SessionMode session_mode = 4; // Client requests that the session be of this mode
-  string session_user = 5; // Client requests that the session be tied to this user account
-  string session_filename = 6; // Client requests that the session prepare this remote file for transfer
-  bool session_created = 7; // Server indicates whether or not a session was created
-  string session_error = 8; // Server can optionally provide a error explaining why session cannot be created
-  string session_id = 9; // Server provides a valid session ID if one was created
-  string session_motd = 10; // Server provides a MOTD to be displayed to the client
+  bool session_created = 4; // Server indicates whether or not a session was created
+  string session_error = 5; // Server can optionally provide a error explaining why session cannot be created
+  string session_hostname = 6; // Server provides a valid session hostname if one was created
 }
 
 // Session messages are sent with encryption guarantees between a server and client.
@@ -41,13 +38,15 @@ message PublicMessage {
 message SessionMessage {
   enum MessageType {
     EXIT = 0; // C->S, S->C, sent by either party to indicate session is closed
-    HEARTBEAT_CLIENT = 1; // C->S, empty message to signal that client is still active
-    HEARTBEAT_SERVER = 2; // S->C, empty message to signal that server is still active
-    PTY_INPUT = 3; // C->S, client is sending commands to the server's PTY
-    PTY_WINCH = 4; // C->S, client wants to adjust the size of the server's PTY 
-    PTY_OUTPUT = 5; // S->C, server is sending output from its PTY
-    FILE_TRANSFER = 6; // S->C, C->S, the party sending a file uses this message to transfer data
-    FILE_TRANSFER_FINISH = 7; // S->C, C->S, the party sending a file indicates that they are done
+    PARAM_REQUEST = 1; // C->S, client starts by requesting that the session follow these parameters
+    PARAM_RESPONSE = 2; // S->C, server acknowledges that it will respect the client's wishes
+    HEARTBEAT_CLIENT = 3; // C->S, empty message to signal that client is still active
+    HEARTBEAT_SERVER = 4; // S->C, empty message to signal that server is still active
+    PTY_INPUT = 5; // C->S, client is sending commands to the server's PTY
+    PTY_WINCH = 6; // C->S, client wants to adjust the size of the server's PTY
+    PTY_OUTPUT = 7; // S->C, server is sending output from its PTY
+    FILE_TRANSFER = 8; // S->C, C->S, the party sending a file uses this message to transfer data
+    FILE_TRANSFER_FINISH = 9; // S->C, C->S, the party sending a file indicates that they are done
   }
   // All messages
   MessageType type = 1;
@@ -55,11 +54,16 @@ message SessionMessage {
   // Exit messages
   bool exit_normal = 3; // Sending party specifies if they are exiting normally
   string exit_error = 4; // Sending party specifies that they are exiting because of an error
+  // Parameter messages
+  SessionMode param_mode = 5; // Client requests that the session be of this mode
+  string param_username = 6; // Client requests that the session be tied to this user account
+  string param_filename = 7; // Client requests that the session prepare this remote file for transfer
+  string param_motd = 8; // Server provides a MOTD to be displayed to the client
   // PTY messages
-  bytes pty_payload = 5; // used by PTY_INPUT, PTY_OUTPUT messages
-  uint64 pty_dimensions = 6; // used by PTY_WINCH message
+  bytes pty_payload = 9; // used by PTY_INPUT, PTY_OUTPUT messages
+  uint64 pty_dimensions = 10; // used by PTY_WINCH message
   // File messages
-  bytes file_payload = 13; // used by FILE_TRANSFER message
+  bytes file_payload = 11; // used by FILE_TRANSFER message
 }
 
 // An encrypted session message contains a session message in ciphertext format.

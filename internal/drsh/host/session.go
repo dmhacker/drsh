@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,11 +28,12 @@ type Session struct {
 	Host                 *RedisHost
 	mode                 drshproto.SessionMode
 	clientHostname       string
+	servHostname         string
+	lastMessageMutex     sync.Mutex
+	lastMessageTimestamp time.Time
 	ptyFile              *os.File
 	ptyResizeFlag        bool
 	transferFile         *os.File
-	lastMessageMutex     sync.Mutex
-	lastMessageTimestamp time.Time
 }
 
 func userShell(username string) (*exec.Cmd, error) {
@@ -61,67 +63,13 @@ func userShell(username string) (*exec.Cmd, error) {
 // client's public key and target username.
 // It sets up the Redis host, subscribes to the proper channel, assigns a name to the session,
 // sets up encryption, and initializes the client's interactive pseudoterminal and/or transfer file.
-func NewSession(serv *Server, clnt string, keyPart []byte, mode drshproto.SessionMode, username string, filename string) (*Session, error) {
-	// Initialize pseudoterminal
-	cmd, err := userShell(username)
-	if err != nil {
-		return nil, err
-	}
-	ptmx, err := pty.Start(cmd)
-	if err != nil {
-		return nil, err
-	}
-
-	// Adjust remote filename to be relative to current user's home directory
-	// filepath.Abs is relative to the working directory, so the WD needs to be temporarily set
-	// to the home directory if the server is run from a subdirectory
-	savedWd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	usr, err := user.Lookup(username)
-	if err != nil {
-		return nil, err
-	}
-	err = os.Chdir(usr.HomeDir)
-	if err != nil {
-		return nil, err
-	}
-	adjustedFilename, err := filepath.Abs(filename)
-	if err != nil {
-		os.Chdir(savedWd)
-		return nil, err
-	}
-	os.Chdir(savedWd)
-
-	// Open file for uploading, downloading depending on mode
-	var transferFile *os.File
-	if mode == drshproto.SessionMode_MODE_FILE_UPLOAD {
-		transferFile, err = os.Create(adjustedFilename)
-		if err != nil {
-			return nil, err
-		}
-	} else if mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
-		transferFile, err = os.Open(adjustedFilename)
-		if err != nil {
-			return nil, err
-		}
-	} else if mode == drshproto.SessionMode_MODE_PTY {
-		transferFile = nil
-	} else {
-		return nil, fmt.Errorf("invalid session mode")
-	}
-
-	// Initialize session
+func NewSession(serv *Server, clnt string, keyPart []byte) (*Session, error) {
 	session := Session{
-		mode:                 mode,
+		mode:                 drshproto.SessionMode_MODE_WAITING,
+		servHostname:         serv.Host.Hostname,
 		clientHostname:       clnt,
-		ptyFile:              ptmx,
-		ptyResizeFlag:        false,
-		transferFile:         transferFile,
 		lastMessageTimestamp: time.Now(),
 	}
-
 	// Set up session properties & Redis connection
 	name, err := drshutil.RandomName()
 	if err != nil {
@@ -131,7 +79,6 @@ func NewSession(serv *Server, clnt string, keyPart []byte, mode drshproto.Sessio
 	if err != nil {
 		return nil, err
 	}
-
 	// Set up shared key through key exchange
 	err = session.Host.Encryption.PrepareKeyExchange()
 	if err != nil {
@@ -141,7 +88,6 @@ func NewSession(serv *Server, clnt string, keyPart []byte, mode drshproto.Sessio
 	if err != nil {
 		return nil, err
 	}
-
 	return &session, nil
 }
 
@@ -214,19 +160,123 @@ func (session *Session) handleExit(err error, ack bool) {
 		session.Host.Logger.Infof("'%s' has left session %s.", session.clientHostname, session.Host.Hostname)
 	}
 	if ack {
-		session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
-			Type:   drshproto.SessionMessage_EXIT,
-			Sender: session.Host.Hostname,
-		})
+		resp := drshproto.SessionMessage{
+			Type:       drshproto.SessionMessage_EXIT,
+			Sender:     session.Host.Hostname,
+			ExitNormal: true,
+		}
+		if err != nil {
+			resp.ExitNormal = false
+			resp.ExitError = err.Error()
+		}
+		session.Host.SendSessionMessage(session.clientHostname, resp)
 	}
 	session.Close()
+}
+
+func (session *Session) handleParam(mode drshproto.SessionMode, username string, filename string) {
+	// Parameters are only allowed to be set when the session is in waiting mode
+	if session.mode != drshproto.SessionMode_MODE_WAITING {
+		return
+	}
+	valid := false
+	resp := drshproto.SessionMessage{
+		Type:   drshproto.SessionMessage_PARAM_RESPONSE,
+		Sender: session.Host.Hostname,
+	}
+	if mode == drshproto.SessionMode_MODE_PTY {
+		cmd, err := userShell(username)
+		if err != nil {
+			session.handleExit(err, true)
+			return
+		}
+		ptmx, err := pty.Start(cmd)
+		if err != nil {
+			session.handleExit(err, true)
+			return
+		}
+		session.ptyFile = ptmx
+		session.ptyResizeFlag = false
+		valid = true
+		resp.ParamMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(session.servHostname, "se-") + " via drsh.\n"
+	} else if mode == drshproto.SessionMode_MODE_FILE_UPLOAD || mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
+		// Adjust remote filename to be relative to current user's home directory
+		// filepath.Abs is relative to the working directory, so the WD needs to be temporarily set
+		// to the home directory if the server is run from a subdirectory
+		savedWd, err := os.Getwd()
+		if err != nil {
+			session.handleExit(err, true)
+			return
+		}
+		usr, err := user.Lookup(username)
+		if err != nil {
+			session.handleExit(err, true)
+			return
+		}
+		err = os.Chdir(usr.HomeDir)
+		if err != nil {
+			session.handleExit(err, true)
+			return
+		}
+		adjustedFilename, err := filepath.Abs(filename)
+		if err != nil {
+			session.handleExit(err, true)
+			return
+		}
+		os.Chdir(savedWd)
+		// Open file for uploading, downloading depending on mode
+		var transferFile *os.File
+		if mode == drshproto.SessionMode_MODE_FILE_UPLOAD {
+			transferFile, err = os.Create(adjustedFilename)
+			if err != nil {
+				session.handleExit(err, true)
+				return
+			}
+		} else if mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
+			transferFile, err = os.Open(adjustedFilename)
+			if err != nil {
+				session.handleExit(err, true)
+				return
+			}
+		}
+		session.transferFile = transferFile
+		valid = true
+	}
+	if valid {
+		session.mode = mode
+		session.Host.SendSessionMessage(session.clientHostname, resp)
+		if session.mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
+			go (func() {
+				for {
+					buf := make([]byte, 4096)
+					cnt, err := session.transferFile.Read(buf)
+					if err != nil {
+						if err != io.EOF {
+							session.handleExit(err, true)
+						} else {
+							session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
+								Type:   drshproto.SessionMessage_FILE_TRANSFER_FINISH,
+								Sender: session.Host.Hostname,
+							})
+						}
+						break
+					}
+					session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
+						Type:        drshproto.SessionMessage_FILE_TRANSFER,
+						Sender:      session.Host.Hostname,
+						FilePayload: buf[:cnt],
+					})
+				}
+			})()
+		}
+	}
 }
 
 func (session *Session) startMessageHandler() {
 	for imsg := range session.Host.incomingMessages {
 		msg, err := session.Host.GetSessionMessage(imsg)
 		if err != nil {
-			session.Host.Logger.Warnf("Failed to get session message: %s", err)
+			session.Host.Logger.Warnf("Error handling message: %s", err)
 			continue
 		}
 		if msg == nil {
@@ -251,7 +301,13 @@ func (session *Session) startMessageHandler() {
 		case drshproto.SessionMessage_FILE_TRANSFER_FINISH:
 			session.handleFileTransferFinish()
 		case drshproto.SessionMessage_EXIT:
-			session.handleExit(nil, false)
+			if msg.ExitNormal {
+				session.handleExit(nil, false)
+			} else {
+				session.handleExit(fmt.Errorf("client refused connection: %s", msg.ExitError), false)
+			}
+		case drshproto.SessionMessage_PARAM_REQUEST:
+			session.handleParam(msg.GetParamMode(), msg.GetParamUsername(), msg.GetParamFilename())
 		default:
 			session.Host.Logger.Warnf("Received invalid message from '%s'.", msg.GetSender())
 		}
@@ -282,29 +338,6 @@ func (session *Session) startPtyOutputHandler() {
 	}
 }
 
-func (session *Session) startFileDownloadHandler() {
-	for {
-		buf := make([]byte, 4096)
-		cnt, err := session.transferFile.Read(buf)
-		if err != nil {
-			if err != io.EOF {
-				session.handleExit(err, true)
-			} else {
-				session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
-					Type:   drshproto.SessionMessage_FILE_TRANSFER_FINISH,
-					Sender: session.Host.Hostname,
-				})
-			}
-			break
-		}
-		session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
-			Type:        drshproto.SessionMessage_FILE_TRANSFER,
-			Sender:      session.Host.Hostname,
-			FilePayload: buf[:cnt],
-		})
-	}
-}
-
 func (session *Session) startTimeoutHandler() {
 	for {
 		if !session.Host.IsOpen() {
@@ -322,9 +355,6 @@ func (session *Session) Start() {
 	session.Host.Start()
 	go session.startMessageHandler()
 	go session.startTimeoutHandler()
-	if session.mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
-		go session.startFileDownloadHandler()
-	}
 }
 
 // Performs session cleanup but does not destroy the Redis connection.

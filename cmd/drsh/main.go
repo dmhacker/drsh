@@ -151,21 +151,39 @@ func runLogin(cmd *cobra.Command, args []string) {
 	clnt := newClientFromCommand(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
-	clnt.LoginInteractively()
+	if err := clnt.LoginInteractively(); err != nil {
+		clnt.Host.Logger.Infof("Client exited with error: %s", err)
+		er(err)
+	} else {
+		clnt.Host.Logger.Info("Client exited normally.")
+	    fmt.Printf("Connection to remote server closed.\n")
+	}
 }
 
 func runUpload(cmd *cobra.Command, args []string) {
 	clnt := newClientFromCommand(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
-	clnt.UploadFile(os.Args[3], os.Args[4])
+	if err := clnt.UploadFile(os.Args[3], os.Args[4]); err != nil {
+		clnt.Host.Logger.Infof("Client exited with error: %s", err)
+		er(err)
+	} else {
+		clnt.Host.Logger.Info("Client exited normally.")
+	    fmt.Printf("File uploaded to remote server.\n")
+	}
 }
 
 func runDownload(cmd *cobra.Command, args []string) {
 	clnt := newClientFromCommand(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
-	clnt.DownloadFile(os.Args[3], os.Args[4])
+	if err := clnt.DownloadFile(os.Args[3], os.Args[4]); err != nil {
+		clnt.Host.Logger.Infof("Client exited with error: %s", err)
+		er(err)
+	} else {
+		clnt.Host.Logger.Info("Client exited normally.")
+	    fmt.Printf("File downloaded from remote server.\n")
+	}
 }
 
 func runPing(cmd *cobra.Command, args []string) {

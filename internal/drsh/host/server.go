@@ -1,10 +1,7 @@
 package host
 
 import (
-	"strings"
-
 	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
-	drshutil "github.com/dmhacker/drsh/internal/drsh/util"
 	"go.uber.org/zap"
 )
 
@@ -35,12 +32,12 @@ func (serv *Server) handlePing(sender string) {
 	})
 }
 
-func (serv *Server) handleSession(sender string, keyPart []byte, mode drshproto.SessionMode, username string, filename string) {
+func (serv *Server) handleSession(sender string, keyPart []byte) {
 	resp := drshproto.PublicMessage{
 		Type:   drshproto.PublicMessage_SESSION_RESPONSE,
 		Sender: serv.Host.Hostname,
 	}
-	session, err := NewSession(serv, sender, keyPart, mode, username, filename)
+	session, err := NewSession(serv, sender, keyPart)
 	if err != nil {
 		serv.Host.Logger.Warnf("Failed to setup session with '%s': %s", sender, err)
 		resp.SessionCreated = false
@@ -50,8 +47,7 @@ func (serv *Server) handleSession(sender string, keyPart []byte, mode drshproto.
 		serv.Host.Logger.Infof("'%s' has joined session %s.", sender, session.Host.Hostname)
 		resp.SessionCreated = true
 		resp.SessionKeyPart = session.Host.Encryption.PrivateKey.Bytes()
-		resp.SessionId = session.Host.Hostname
-		resp.SessionMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(serv.Host.Hostname, "se-") + " via drsh.\n"
+		resp.SessionHostname = session.Host.Hostname
 		serv.Host.SendPublicMessage(sender, resp)
 		session.Host.Encryption.FreePrivateKeys()
 		session.Start()
@@ -69,7 +65,7 @@ func (serv *Server) startMessageHandler() {
 		case drshproto.PublicMessage_PING_REQUEST:
 			serv.handlePing(msg.GetSender())
 		case drshproto.PublicMessage_SESSION_REQUEST:
-			serv.handleSession(msg.GetSender(), msg.GetSessionKeyPart(), msg.GetSessionMode(), msg.GetSessionUser(), msg.GetSessionFilename())
+			serv.handleSession(msg.GetSender(), msg.GetSessionKeyPart())
 		default:
 			serv.Host.Logger.Warnf("Received invalid message from '%s'.", msg.GetSender())
 		}
