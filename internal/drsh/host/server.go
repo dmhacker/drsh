@@ -85,6 +85,7 @@ func (serv *Server) addInterruptHandler() {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
+		serv.Host.Logger.Infof("Server %s is shutting down.", serv.Host.Hostname)
 		// All active sessions are given the chance to properly exit
 		serv.Sessions.Range(func(key interface{}, value interface{}) bool {
 			session := value.(*Session)
