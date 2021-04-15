@@ -12,13 +12,14 @@ import (
 )
 
 var (
+	version     = "v1.5.0"
 	cfgFilename = ""
 	rootCmd     = &cobra.Command{
 		Use:   "drsh",
 		Short: "A supplement to ssh with an intermediate proxy",
 		Long: `drsh attempts to emulate the same core functionality as ssh, except
 rather than setting up a direct connection between server & client, packets are 
-instead routed through a message broker in form of a Redis instance.`,
+instead routed through Redis.`,
 	}
 	cfgCmd = &cobra.Command{
 		Use:   "config",
@@ -33,8 +34,7 @@ but the default config provides a useful starting point.`,
 		Short: "Start the drsh daemon for this machine",
 		Long: `Actively listen for connection requests from other clients on the
 Redis network. Functions similarily to sshd, only all packets are routed
-through Redis. All clients are assumed to be connecting using an interactive
-session, requiring the use of a pty.`,
+through Redis.`,
 		Run: runServe,
 	}
 	loginCmd = &cobra.Command{
@@ -67,68 +67,70 @@ The remote filename should be specified from the perspective of the remote user'
 		Use:   "ping [alias|user@host@redis]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Ping a remote server",
-		Long: `Calculate the RTT from the current machine to the specified server.
+		Long: `Calculate the round-trip time from the current machine to the specified server.
 Connection strings are either provided as an alias in the config or in raw format.`,
 		Run: runPing,
+	}
+	versionCmd = &cobra.Command{
+		Use:   "version",
+		Short: "Displays the current version of this software",
+		Long:  `Displays the current version of this software.`,
+		Run:   runVersion,
 	}
 )
 
 func runConfig(cmd *cobra.Command, args []string) {
 	if err := drshconf.WriteDefaultConfig(cfgFilename); err != nil {
-		er(err)
+		terminate(err)
 	}
 	fmt.Printf("The default config has been written to '%s'.\n", cfgFilename)
 	fmt.Printf("Please edit it before running a server or client.\n")
 }
 
 func runServe(cmd *cobra.Command, args []string) {
+	// Initialize config & logging
 	cfg := drshconf.Config{}
 	if err := drshconf.ReadConfig(cfgFilename, &cfg); err != nil {
-		er(err)
+		terminate(err)
 	}
-
 	logger := drshconf.NewLogger("server", &cfg)
 	defer logger.Sync()
-	sugar := logger.Sugar()
-
-	serv, err := drshhost.NewServer(cfg.Server.Hostname, cfg.Server.RedisURI, sugar)
+	// Initialize and start server
+	serv, err := drshhost.NewServer(cfg.Server.Hostname, cfg.Server.RedisURI, logger.Sugar())
 	if err != nil {
-		er(err)
+		terminate(err)
 	}
 	defer serv.Close()
 	serv.Start()
-
-	sugar.Infof("Started server '%s' with uid %d", cfg.Server.Hostname, syscall.Getuid())
-	fmt.Printf("The server has been started. Logs are kept at %s.\n", cfg.Server.LogFile)
+	serv.Host.Logger.Infof("Server '%s' under uid %d is now listening for connections.", cfg.Server.Hostname, syscall.Getuid())
+	fmt.Printf("Server has been started. Logs are kept at %s.\n", cfg.Server.LogFile)
 	<-make(chan bool)
 }
 
-func newClientFromCommand(cmd *cobra.Command, args []string) *drshhost.Client {
+func newClient(cmd *cobra.Command, args []string) *drshhost.Client {
+	// Initialize config & logging
 	cfg := drshconf.Config{}
 	if err := drshconf.ReadConfig(cfgFilename, &cfg); err != nil {
-		er(err)
+		terminate(err)
 	}
-
 	logger := drshconf.NewLogger("client", &cfg)
 	defer logger.Sync()
-	sugar := logger.Sugar()
-
-	// Try to resolve alias
-	command := os.Args[2]
+	// Attempt to resolve alias using config
+	rawSelection := args[0]
 	var selection drshconf.AliasEntry
 	var selected bool = false
 	for _, entry := range cfg.Client.Aliases {
-		if command == entry.Alias {
+		if rawSelection == entry.Alias {
 			selection = entry
 			selected = true
 			break
 		}
 	}
-	// If command matches no alias, then interpret it using raw format
+	// If no alias matches, then interpret it directly
 	if !selected {
-		components := strings.Split(command, "@")
+		components := strings.Split(rawSelection, "@")
 		if len(components) < 3 {
-			er(fmt.Errorf("command should either be an alias or in the format USER@HOST@URI"))
+			terminate(fmt.Errorf("command should either be an alias or in the format USER@HOST@URI"))
 		}
 		selection = drshconf.AliasEntry{
 			Username: components[0],
@@ -136,64 +138,67 @@ func newClientFromCommand(cmd *cobra.Command, args []string) *drshhost.Client {
 			RedisURI: strings.Join(components[2:], "@"),
 		}
 	}
-
-	clnt, err := drshhost.NewClient(selection.Username, selection.Hostname, selection.RedisURI, sugar)
+	// Initialize and start client
+	clnt, err := drshhost.NewClient(selection.Username, selection.Hostname, selection.RedisURI, logger.Sugar())
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		terminate(err)
 	}
-
-	sugar.Infof("Started client with connection to %s@%s", selection.Username, selection.Hostname)
+	clnt.Host.Logger.Infof("Client started. Connecting to %s@%s.", selection.Username, selection.Hostname)
 	return clnt
 }
 
 func runLogin(cmd *cobra.Command, args []string) {
-	clnt := newClientFromCommand(cmd, args)
+	clnt := newClient(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
 	if err := clnt.LoginInteractively(); err != nil {
 		clnt.Host.Logger.Infof("Client exited with error: %s", err)
-		er(err)
+		terminate(err)
 	} else {
 		clnt.Host.Logger.Info("Client exited normally.")
-	    fmt.Printf("Connection to remote server closed.\n")
+		fmt.Printf("Connection to remote server closed.\n")
 	}
 }
 
 func runUpload(cmd *cobra.Command, args []string) {
-	clnt := newClientFromCommand(cmd, args)
+	clnt := newClient(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
-	if err := clnt.UploadFile(os.Args[3], os.Args[4]); err != nil {
+	if err := clnt.UploadFile(args[1], args[2]); err != nil {
 		clnt.Host.Logger.Infof("Client exited with error: %s", err)
-		er(err)
+		terminate(err)
 	} else {
 		clnt.Host.Logger.Info("Client exited normally.")
-	    fmt.Printf("File uploaded to remote server.\n")
+		fmt.Printf("File uploaded to remote server.\n")
 	}
 }
 
 func runDownload(cmd *cobra.Command, args []string) {
-	clnt := newClientFromCommand(cmd, args)
+	clnt := newClient(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
-	if err := clnt.DownloadFile(os.Args[3], os.Args[4]); err != nil {
+	if err := clnt.DownloadFile(args[1], args[2]); err != nil {
 		clnt.Host.Logger.Infof("Client exited with error: %s", err)
-		er(err)
+		terminate(err)
 	} else {
 		clnt.Host.Logger.Info("Client exited normally.")
-	    fmt.Printf("File downloaded from remote server.\n")
+		fmt.Printf("File downloaded from remote server.\n")
 	}
 }
 
 func runPing(cmd *cobra.Command, args []string) {
-	clnt := newClientFromCommand(cmd, args)
+	fmt.Println(args)
+	clnt := newClient(cmd, args)
 	defer clnt.Close()
 	clnt.Start()
 	clnt.Ping()
 }
 
-func er(err error) {
+func runVersion(cmd *cobra.Command, args []string) {
+	fmt.Println(version)
+}
+
+func terminate(err error) {
 	fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
 }
@@ -201,20 +206,21 @@ func er(err error) {
 func main() {
 	defCfgFilename, err := drshconf.DefaultConfigFilename()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		terminate(err)
 	}
+	// Set up flags for subcommands
 	cfgCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
 	serveCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
 	loginCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
 	pingCmd.Flags().StringVarP(&cfgFilename, "config", "C", defCfgFilename, "Use the specified config file")
-
+	// Add subcommands to the root command
 	rootCmd.AddCommand(cfgCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(uploadCmd)
 	rootCmd.AddCommand(downloadCmd)
 	rootCmd.AddCommand(pingCmd)
-
+	rootCmd.AddCommand(versionCmd)
+	// Execute the root command
 	rootCmd.Execute()
 }

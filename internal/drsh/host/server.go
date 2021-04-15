@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
 )
@@ -84,6 +85,7 @@ func (serv *Server) addInterruptHandler() {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
+		// All active sessions are given the chance to properly exit
 		serv.Sessions.Range(func(key interface{}, value interface{}) bool {
 			session := value.(*Session)
 			if session.Host.IsOpen() {
@@ -91,6 +93,8 @@ func (serv *Server) addInterruptHandler() {
 			}
 			return true
 		})
+		// Ensure that server has time to send termination packets
+		time.Sleep(100 * time.Millisecond)
 		os.Exit(1)
 	}()
 }

@@ -198,7 +198,7 @@ func (session *Session) handleBootstrap(mode drshproto.SessionMode, username str
 		session.ptyFile = ptmx
 		session.ptyResizeFlag = false
 		valid = true
-		resp.BootstrapMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(session.server.Host.Hostname, "se-") + " via drsh.\n"
+		resp.BootstrapMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(session.server.Host.Hostname, "se-") + ".\n"
 	} else if mode == drshproto.SessionMode_MODE_FILE_UPLOAD || mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
 		// Adjust remote filename to be relative to current user's home directory
 		// filepath.Abs is relative to the working directory, so the WD needs to be temporarily set
@@ -295,6 +295,9 @@ func (session *Session) startMessageHandler() {
 
 func (session *Session) startFileTransferHandler() {
 	for {
+		if !session.Host.IsOpen() {
+			break
+		}
 		buf := make([]byte, 4096)
 		cnt, err := session.transferFile.Read(buf)
 		if err != nil {

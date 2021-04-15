@@ -262,28 +262,7 @@ func (clnt *Client) UploadFile(localFilename string, remoteFilename string) erro
 		return control.exitError
 	}
 	// Read from local file, break into chunks, and send each one individually
-	go (func() {
-		for {
-			buf := make([]byte, 4096)
-			cnt, err := clnt.transferFile.Read(buf)
-			if err != nil {
-				if err != io.EOF {
-					clnt.handleExit(err, true)
-				} else {
-					clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
-						Type:   drshproto.SessionMessage_FILE_CLOSE,
-						Sender: clnt.Host.Hostname,
-					})
-				}
-				break
-			}
-			clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
-				Type:        drshproto.SessionMessage_FILE_CHUNK,
-				Sender:      clnt.Host.Hostname,
-				FilePayload: buf[:cnt],
-			})
-		}
-	})()
+	go clnt.startFileTransferHandler()
 	// Wait for some signal that the session should end
 	control = <-clnt.sessionControl
 	return control.exitError
@@ -450,6 +429,32 @@ func (clnt *Client) startTimeoutHandler() {
 			break
 		}
 		time.Sleep(30 * time.Second)
+	}
+}
+
+func (clnt *Client) startFileTransferHandler() {
+	for {
+		if !clnt.Host.IsOpen() {
+			break
+		}
+		buf := make([]byte, 4096)
+		cnt, err := clnt.transferFile.Read(buf)
+		if err != nil {
+			if err != io.EOF {
+				clnt.handleExit(err, true)
+			} else {
+				clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
+					Type:   drshproto.SessionMessage_FILE_CLOSE,
+					Sender: clnt.Host.Hostname,
+				})
+			}
+			break
+		}
+		clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
+			Type:        drshproto.SessionMessage_FILE_CHUNK,
+			Sender:      clnt.Host.Hostname,
+			FilePayload: buf[:cnt],
+		})
 	}
 }
 
