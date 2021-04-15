@@ -1,0 +1,81 @@
+syntax = "proto3";
+package drsh.proto;
+
+option go_package = "./internal/drsh/proto";
+
+enum SessionMode {
+  MODE_WAITING = 0;
+  MODE_PTY = 1;
+  MODE_FILE_UPLOAD = 2;
+  MODE_FILE_DOWNLOAD = 3;
+}
+
+// Public messages are sent without encryption between any server and client.
+// They are ephmereal messages that require minimal or no state to be kept on the server.
+// Sensitive information should not be transferred here.
+message PublicMessage {
+  enum MessageType {
+    READY = 0; // C->C, S->S, used to test that Redis is delivering messages
+    PING_REQUEST = 1; // C->S, client wants to check if the server is active
+    PING_RESPONSE = 2; // S->C, server responds to the client that it is active
+    SESSION_REQUEST = 3; // C->S, client wants to establish an encrypted session with the server
+    SESSION_RESPONSE = 4; // S->C, server responds if it is able to set up a session
+  }
+  // All messages
+  MessageType type = 1;
+  string sender = 2;
+  // Session messages
+  bytes session_key_part = 3; // Sent by both C&S to establish a shared key
+  bool session_created = 4; // Server indicates whether or not a session was created
+  string session_error = 5; // Server can optionally provide a error explaining why session cannot be created
+  string session_hostname = 6; // Server provides a valid session hostname if one was created
+}
+
+// Session messages are sent with encryption guarantees between a server and client.
+// All session messages are assumed to be in a ciphertext format in transit.
+// Thus, they can implement core logic associated with sensitive actions, such as
+// transferring files, sending commands to a server as a user, etc.
+message SessionMessage {
+  enum MessageType {
+    EXIT = 0; // C->S, S->C, sent by either party to indicate session is closed
+    BOOTSTRAP_REQUEST = 1; // C->S, client starts by requesting that the session follow some parameters
+    BOOTSTRAP_RESPONSE = 2; // S->C, server acknowledges that it will respect the client's wishes
+    HEARTBEAT_REQUEST = 3; // C->S, empty message to signal that client is still active
+    HEARTBEAT_RESPONSE = 4; // S->C, empty message to signal that server is still active
+    PTY_INPUT = 5; // C->S, client is sending commands to the server's PTY
+    PTY_WINCH = 6; // C->S, client wants to adjust the size of the server's PTY
+    PTY_OUTPUT = 7; // S->C, server is sending output from its PTY
+    FILE_CHUNK = 8; // S->C, C->S, the party sending a file uses this message to transfer data
+    FILE_CLOSE = 9; // S->C, C->S, the party sending a file indicates that they are done
+  }
+  // All messages
+  MessageType type = 1;
+  string sender = 2;
+  // Exit messages
+  bool exit_normal = 3; // Sending party specifies if they are exiting normally
+  string exit_error = 4; // Sending party specifies that they are exiting because of an error
+  // Bootstrap messages
+  SessionMode bootstrap_mode = 5; // Client requests that the session be of this mode
+  string bootstrap_username = 6; // Client requests that the session be tied to this user account
+  string bootstrap_filename = 7; // Client requests that the session prepare this remote file for transfer
+  string bootstrap_motd = 8; // Server provides a MOTD to be displayed to the client
+  // PTY messages
+  bytes pty_payload = 9; // Used by PTY_INPUT, PTY_OUTPUT messages
+  uint64 pty_dimensions = 10; // Used by PTY_WINCH message
+  // File messages
+  bytes file_payload = 11; // Used by FILE_CHUNK message
+}
+
+// An encrypted session message contains a session message in ciphertext format.
+message EncryptedSessionMessage {
+  bytes ciphertext = 1;
+  bytes nonce = 2;
+}
+
+// Any message in transit must be in one of the following formats.
+message Message {
+    oneof wrapper {
+        PublicMessage public_message = 1;
+        EncryptedSessionMessage encrypted_session_message = 2;
+    }
+}

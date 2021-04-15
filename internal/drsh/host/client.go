@@ -17,51 +17,54 @@ import (
 )
 
 type pingResponse struct {
-	Sender   string
-	Size     int
-	RecvTime time.Time
+	sender   string
+	size     int
+	recvTime time.Time
+}
+
+type sessionControlEvent struct {
+	exitFlag  bool
+	exitError error
 }
 
 // Client represents a host on the network who wishes to do something with a specific server,
 // whether this is a file-transfer operation, an interactive session, or a series of pings.
 type Client struct {
 	Host                 *RedisHost
-	Logger               *zap.SugaredLogger
-	RawHostname          string
-	RemoteUsername       string
-	RemoteHostname       string
-	LastMessageMutex     sync.Mutex
-	LastMessageTimestamp time.Time
-	ConnectedState       bool
-	ConnectedSession     string
-	Pinged               chan pingResponse
-	Connected            chan bool
-	Finished             chan bool
-	TransferFile         *os.File
-	DisplayMotd          bool
+	rawRemoteHostname    string
+	remoteUsername       string
+	remoteHostname       string
+	pingResponses        chan pingResponse
+	sessionHostname      string
+	sessionOnline        bool
+	sessionMode          drshproto.SessionMode
+	sessionProposedMode  drshproto.SessionMode
+	sessionControl       chan sessionControlEvent
+	transferFile         *os.File
+	lastMessageMutex     sync.Mutex
+	lastMessageTimestamp time.Time
 }
 
 // NewClient creates a new client and its underlying connection to Redis. It is not actively
-// receiving and sending packets at this point; that is only enabled upon start.
+// receiving, sending, or processing messages at this point; that is only enabled upon start.
 func NewClient(username string, hostname string, uri string, logger *zap.SugaredLogger) (*Client, error) {
 	clnt := Client{
-		Logger:               logger,
-		RawHostname:          hostname,
-		RemoteUsername:       username,
-		RemoteHostname:       "se-" + hostname,
-		LastMessageTimestamp: time.Now(),
-		ConnectedState:       false,
-		Connected:            make(chan bool, 1),
-		Finished:             make(chan bool, 1),
-		Pinged:               make(chan pingResponse, 1),
-		TransferFile:         nil,
-		DisplayMotd:          false,
+		rawRemoteHostname:    hostname,
+		remoteUsername:       username,
+		remoteHostname:       "se-" + hostname,
+		pingResponses:        make(chan pingResponse, 1),
+		sessionMode:          drshproto.SessionMode_MODE_WAITING,
+		sessionProposedMode:  drshproto.SessionMode_MODE_WAITING,
+		sessionOnline:        false,
+		sessionControl:       make(chan sessionControlEvent, 1),
+		transferFile:         nil,
+		lastMessageTimestamp: time.Now(),
 	}
 	name, err := drshutil.RandomName()
 	if err != nil {
 		return nil, err
 	}
-	clnt.Host, err = NewRedisHost("cl-"+name, uri, logger, clnt.handleMessage)
+	clnt.Host, err = NewRedisHost("cl-"+name, uri, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -69,49 +72,59 @@ func NewClient(username string, hostname string, uri string, logger *zap.Sugared
 }
 
 func (clnt *Client) refreshExpiry() {
-	clnt.LastMessageMutex.Lock()
-	defer clnt.LastMessageMutex.Unlock()
-	clnt.LastMessageTimestamp = time.Now()
+	clnt.lastMessageMutex.Lock()
+	defer clnt.lastMessageMutex.Unlock()
+	clnt.lastMessageTimestamp = time.Now()
 }
 
 func (clnt *Client) isExpired() bool {
-	clnt.LastMessageMutex.Lock()
-	defer clnt.LastMessageMutex.Unlock()
-	return time.Now().Sub(clnt.LastMessageTimestamp).Minutes() >= 5
+	clnt.lastMessageMutex.Lock()
+	defer clnt.lastMessageMutex.Unlock()
+	return time.Now().Sub(clnt.lastMessageTimestamp).Minutes() >= 5
 }
 
 func (clnt *Client) handlePing(sender string, size int) {
-	clnt.Pinged <- pingResponse{
-		Sender:   sender,
-		Size:     size,
-		RecvTime: time.Now(),
+	clnt.pingResponses <- pingResponse{
+		sender:   sender,
+		size:     size,
+		recvTime: time.Now(),
 	}
 }
 
-func (clnt *Client) handleHandshake(sender string, success bool, key []byte, session string, motd string) {
+func (clnt *Client) handleSession(sender string, success bool, err string, keyPart []byte, sessionHostname string) {
 	if !success {
-		clnt.handleExit(fmt.Errorf("server refused connection"), false)
+		clnt.handleExit(fmt.Errorf("server refused connection: %s", err), false)
 		return
 	}
-	if !clnt.ConnectedState && sender == clnt.RemoteHostname {
-		err := clnt.Host.CompleteKeyExchange(key)
+	if !clnt.sessionOnline && sender == clnt.remoteHostname {
+		err := clnt.Host.Encryption.CompleteKeyExchange(keyPart)
 		if err != nil {
 			clnt.handleExit(err, false)
 			return
 		}
-		clnt.Host.FreePrivateKeys()
-		clnt.Host.SetEncryptionEnabled(true)
-		if clnt.DisplayMotd {
-			fmt.Print(motd)
+		clnt.Host.Encryption.FreePrivateKeys()
+		clnt.sessionHostname = sessionHostname
+		clnt.sessionOnline = true
+		clnt.sessionControl <- sessionControlEvent{
+			exitFlag:  false,
+			exitError: nil,
 		}
-		clnt.ConnectedSession = session
-		clnt.ConnectedState = true
-		clnt.Connected <- true
+	}
+}
+
+func (clnt *Client) handleBootstrap(sender string, motd string) {
+	if clnt.sessionMode == drshproto.SessionMode_MODE_WAITING && sender == clnt.sessionHostname {
+		fmt.Print(motd)
+		clnt.sessionMode = clnt.sessionProposedMode
+		clnt.sessionControl <- sessionControlEvent{
+			exitFlag:  false,
+			exitError: nil,
+		}
 	}
 }
 
 func (clnt *Client) handlePtyOutput(sender string, payload []byte) {
-	if clnt.ConnectedState && sender == clnt.ConnectedSession {
+	if clnt.sessionMode == drshproto.SessionMode_MODE_PTY && sender == clnt.sessionHostname {
 		_, err := os.Stdout.Write(payload)
 		if err != nil {
 			clnt.handleExit(err, true)
@@ -119,152 +132,180 @@ func (clnt *Client) handlePtyOutput(sender string, payload []byte) {
 	}
 }
 
-func (clnt *Client) handleFileDownload(sender string, payload []byte) {
-	if clnt.ConnectedState && sender == clnt.ConnectedSession && clnt.TransferFile != nil {
-		_, err := clnt.TransferFile.Write(payload)
+func (clnt *Client) handleFileChunk(sender string, payload []byte) {
+	if clnt.sessionMode == drshproto.SessionMode_MODE_FILE_DOWNLOAD && sender == clnt.sessionHostname && clnt.transferFile != nil {
+		_, err := clnt.transferFile.Write(payload)
 		if err != nil {
 			clnt.handleExit(err, true)
 		}
 	}
 }
 
-func (clnt *Client) handleFileDownloadFinish(sender string) {
-	if clnt.ConnectedState && sender == clnt.ConnectedSession && clnt.TransferFile != nil {
+func (clnt *Client) handleFileClose(sender string) {
+	if clnt.sessionMode == drshproto.SessionMode_MODE_FILE_DOWNLOAD && sender == clnt.sessionHostname && clnt.transferFile != nil {
 		clnt.handleExit(nil, true)
 	}
 }
 
 func (clnt *Client) handleExit(err error, ack bool) {
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		clnt.Logger.Infof("Client exited with error: %s", err)
-	} else {
-		clnt.Logger.Info("Client exited normally.")
-	}
-	if clnt.ConnectedState {
-		if ack {
-			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
-				Type:   drshproto.Message_EXIT,
-				Sender: clnt.Host.Hostname,
-			})
-			// Add a slight delay so the disconnect packet can send
-			time.Sleep(100 * time.Millisecond)
+	if ack {
+		resp := drshproto.SessionMessage{
+			Type:       drshproto.SessionMessage_EXIT,
+			Sender:     clnt.Host.Hostname,
+			ExitNormal: true,
 		}
-		clnt.Finished <- true
-	} else {
-		os.Exit(1)
+		if err != nil {
+			resp.ExitNormal = false
+			resp.ExitError = err.Error()
+		}
+		clnt.Host.SendSessionMessage(clnt.sessionHostname, resp)
+		// Add a slight delay so the exit message can send before the client quits
+		time.Sleep(100 * time.Millisecond)
+	}
+	clnt.sessionControl <- sessionControlEvent{
+		exitFlag:  true,
+		exitError: err,
 	}
 }
 
-func (clnt *Client) handleMessage(msg drshproto.Message) {
-	clnt.refreshExpiry()
-	switch msg.GetType() {
-	case drshproto.Message_PING_RESPONSE:
-		clnt.handlePing(msg.GetSender(), proto.Size(&msg))
-	case drshproto.Message_HEARTBEAT_RESPONSE:
-		// Heartbeats don't require any processing other than timestamping
-	case drshproto.Message_HANDSHAKE_RESPONSE:
-		clnt.handleHandshake(msg.GetSender(), msg.GetHandshakeSuccess(), msg.GetHandshakeKey(), msg.GetHandshakeSession(), msg.GetHandshakeMotd())
-	case drshproto.Message_PTY_OUTPUT:
-		clnt.handlePtyOutput(msg.GetSender(), msg.GetPtyPayload())
-	case drshproto.Message_FILE_DOWNLOAD:
-		clnt.handleFileDownload(msg.GetSender(), msg.GetFilePayload())
-	case drshproto.Message_FILE_DOWNLOAD_FINISH:
-		clnt.handleFileDownloadFinish(msg.GetSender())
-	case drshproto.Message_EXIT:
-		clnt.handleExit(nil, false)
-	default:
-		clnt.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
+func (clnt *Client) startMessageHandler() {
+	for imsg := range clnt.Host.incomingMessages {
+		pmsg := clnt.Host.GetPublicMessage(imsg)
+		smsg, err := clnt.Host.GetSessionMessage(imsg)
+		if err != nil {
+			clnt.Host.Logger.Warnf("Error handling message: %s", err)
+			continue
+		}
+		if pmsg != nil {
+			switch pmsg.GetType() {
+			case drshproto.PublicMessage_PING_RESPONSE:
+				clnt.handlePing(pmsg.GetSender(), proto.Size(pmsg))
+			case drshproto.PublicMessage_SESSION_RESPONSE:
+				clnt.handleSession(pmsg.GetSender(), pmsg.GetSessionCreated(), pmsg.GetSessionError(), pmsg.GetSessionKeyPart(), pmsg.GetSessionHostname())
+			default:
+				clnt.Host.Logger.Warnf("Received invalid message from '%s'.", pmsg.GetSender())
+			}
+		} else if smsg != nil {
+			clnt.refreshExpiry()
+			switch smsg.GetType() {
+			case drshproto.SessionMessage_HEARTBEAT_RESPONSE:
+				// Heartbeats don't require any processing
+			case drshproto.SessionMessage_PTY_OUTPUT:
+				clnt.handlePtyOutput(smsg.GetSender(), smsg.GetPtyPayload())
+			case drshproto.SessionMessage_FILE_CHUNK:
+				clnt.handleFileChunk(smsg.GetSender(), smsg.GetFilePayload())
+			case drshproto.SessionMessage_FILE_CLOSE:
+				clnt.handleFileClose(smsg.GetSender())
+			case drshproto.SessionMessage_EXIT:
+				if smsg.ExitNormal {
+					clnt.handleExit(nil, false)
+				} else {
+					clnt.handleExit(fmt.Errorf("server refused connection: %s", smsg.ExitError), false)
+				}
+			case drshproto.SessionMessage_BOOTSTRAP_RESPONSE:
+				clnt.handleBootstrap(smsg.GetSender(), smsg.GetBootstrapMotd())
+			default:
+				clnt.Host.Logger.Warnf("Received invalid message from '%s'.", smsg.GetSender())
+			}
+		}
+
 	}
 }
 
-func (clnt *Client) connect(mode drshproto.Message_SessionMode, filename string) {
-	if !clnt.Host.IsListening(clnt.RemoteHostname) {
-		clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
+func (clnt *Client) startSession() {
+	if !clnt.Host.IsListening(clnt.remoteHostname) {
+		clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.rawRemoteHostname), false)
 		return
 	}
 	// Send handshake request to the server
-	err := clnt.Host.PrepareKeyExchange()
+	err := clnt.Host.Encryption.PrepareKeyExchange()
 	if err != nil {
 		clnt.handleExit(err, false)
 		return
 	}
-	clnt.Host.SendMessage(clnt.RemoteHostname, drshproto.Message{
-		Type:              drshproto.Message_HANDSHAKE_REQUEST,
-		Sender:            clnt.Host.Hostname,
-		HandshakeKey:      clnt.Host.KXPrivateKey.Bytes(),
-		HandshakeUser:     clnt.RemoteUsername,
-		HandshakeMode:     mode,
-		HandshakeFilename: filename,
+	clnt.Host.SendPublicMessage(clnt.remoteHostname, drshproto.PublicMessage{
+		Type:           drshproto.PublicMessage_SESSION_REQUEST,
+		Sender:         clnt.Host.Hostname,
+		SessionKeyPart: clnt.Host.Encryption.PrivateKey.Bytes(),
 	})
-	// Wait until we have received a handshake response from the server
-	// This will put us into our own server session
-	<-clnt.Connected
 }
 
-// UploadFile uploads a file to the remote server.
-func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
+func (clnt *Client) configureSession(mode drshproto.SessionMode, filename string) {
+	clnt.sessionProposedMode = mode
+	clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
+		Type:              drshproto.SessionMessage_BOOTSTRAP_REQUEST,
+		Sender:            clnt.Host.Hostname,
+		BootstrapMode:     mode,
+		BootstrapUsername: clnt.remoteUsername,
+		BootstrapFilename: filename,
+	})
+}
+
+// Uploads a file to the remote server.
+func (clnt *Client) UploadFile(localFilename string, remoteFilename string) error {
 	// Open file for reading
 	transferFile, err := os.Open(localFilename)
 	if err != nil {
-		clnt.handleExit(fmt.Errorf("cannot open file '%s'", localFilename), true)
-		return
+		return err
 	}
-	clnt.TransferFile = transferFile
-	defer clnt.TransferFile.Close()
-	clnt.DisplayMotd = false
+	clnt.transferFile = transferFile
+	defer clnt.transferFile.Close()
 	// Establish secure connection to the server
-	clnt.connect(drshproto.Message_MODE_FILE_UPLOAD, remoteFilename)
-	// Read from local file, break into packets, and send each one individually
-	go (func() {
-		for {
-			buf := make([]byte, 4096)
-			cnt, err := clnt.TransferFile.Read(buf)
-			if err != nil {
-				if err != io.EOF {
-					clnt.handleExit(err, true)
-				} else {
-					clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
-						Type:   drshproto.Message_FILE_UPLOAD_FINISH,
-						Sender: clnt.Host.Hostname,
-					})
-				}
-				break
-			}
-			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
-				Type:        drshproto.Message_FILE_UPLOAD,
-				Sender:      clnt.Host.Hostname,
-				FilePayload: buf[:cnt],
-			})
-		}
-	})()
-	// Finished channel will be triggered on error or by the server due to completion
-	<-clnt.Finished
-	fmt.Printf("File '%s' was uploaded to '%s@%s' as '%s'.\n", localFilename, clnt.RemoteUsername, clnt.RawHostname, remoteFilename)
+	clnt.startSession()
+	control := <-clnt.sessionControl
+	if control.exitFlag {
+		return control.exitError
+	}
+	clnt.configureSession(drshproto.SessionMode_MODE_FILE_UPLOAD, remoteFilename)
+	control = <-clnt.sessionControl
+	if control.exitFlag {
+		return control.exitError
+	}
+	// Read from local file, break into chunks, and send each one individually
+	go clnt.startFileTransferHandler()
+	// Wait for some signal that the session should end
+	control = <-clnt.sessionControl
+	return control.exitError
 }
 
-// DownloadFile downloads a file from the remote server.
-func (clnt *Client) DownloadFile(remoteFilename string, localFilename string) {
+// Downloads a file from the remote server.
+func (clnt *Client) DownloadFile(remoteFilename string, localFilename string) error {
 	// Open file for writing
 	transferFile, err := os.Create(localFilename)
 	if err != nil {
-		clnt.handleExit(fmt.Errorf("cannot create file '%s'", localFilename), true)
-		return
+		return err
 	}
-	clnt.TransferFile = transferFile
-	defer clnt.TransferFile.Close()
-	clnt.DisplayMotd = false
+	clnt.transferFile = transferFile
+	defer clnt.transferFile.Close()
 	// Establish secure connection to the server
-	clnt.connect(drshproto.Message_MODE_FILE_DOWNLOAD, remoteFilename)
-	// Finished channel will be triggered on error or server exit due to completion
-	<-clnt.Finished
-	fmt.Printf("File '%s' was downloaded from '%s@%s' to '%s'.\n", remoteFilename, clnt.RemoteUsername, clnt.RawHostname, localFilename)
+	clnt.startSession()
+	control := <-clnt.sessionControl
+	if control.exitFlag {
+		return control.exitError
+	}
+	clnt.configureSession(drshproto.SessionMode_MODE_FILE_DOWNLOAD, remoteFilename)
+	control = <-clnt.sessionControl
+	if control.exitFlag {
+		return control.exitError
+	}
+	// Wait for some signal that the session should end
+	control = <-clnt.sessionControl
+	return control.exitError
 }
 
-// LoginInteractively is a blocking function that facilitates an interactive session with its server.
-func (clnt *Client) LoginInteractively() {
-	clnt.DisplayMotd = true
-	clnt.connect(drshproto.Message_MODE_TERMINAL, "")
+// Creates an interactive session with its server.
+func (clnt *Client) LoginInteractively() error {
+	// Establish secure connection to the server
+	clnt.startSession()
+	control := <-clnt.sessionControl
+	if control.exitFlag {
+		return control.exitError
+	}
+	clnt.configureSession(drshproto.SessionMode_MODE_PTY, "")
+	control = <-clnt.sessionControl
+	if control.exitFlag {
+		return control.exitError
+	}
 	// Capture SIGWINCH signals
 	winchChan := make(chan os.Signal)
 	signal.Notify(winchChan, syscall.SIGWINCH)
@@ -275,15 +316,15 @@ func (clnt *Client) LoginInteractively() {
 				clnt.handleExit(err, true)
 				break
 			}
-			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
-				Type:          drshproto.Message_PTY_WINCH,
+			clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
+				Type:          drshproto.SessionMessage_PTY_WINCH,
 				Sender:        clnt.Host.Hostname,
 				PtyDimensions: drshutil.Pack64(ws.Rows, ws.Cols, ws.X, ws.Y),
 			})
 		}
 	})()
 	winchChan <- syscall.SIGWINCH
-	// Capture input in packets and send to server
+	// Capture input and send to server
 	go (func() {
 		for {
 			buf := make([]byte, 4096)
@@ -292,18 +333,18 @@ func (clnt *Client) LoginInteractively() {
 				clnt.handleExit(err, true)
 				break
 			}
-			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
-				Type:       drshproto.Message_PTY_INPUT,
+			clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
+				Type:       drshproto.SessionMessage_PTY_INPUT,
 				Sender:     clnt.Host.Hostname,
 				PtyPayload: buf[:cnt],
 			})
 		}
 	})()
-	// Keepalive routine sends packets every so often to keep connection alive
+	// Keepalive routine sends messages every so often to keep connection alive
 	go (func() {
 		for {
-			clnt.Host.SendMessage(clnt.ConnectedSession, drshproto.Message{
-				Type:   drshproto.Message_HEARTBEAT_REQUEST,
+			clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
+				Type:   drshproto.SessionMessage_HEARTBEAT_REQUEST,
 				Sender: clnt.Host.Hostname,
 			})
 			time.Sleep(60 * time.Second)
@@ -315,21 +356,20 @@ func (clnt *Client) LoginInteractively() {
 		clnt.handleExit(err, false)
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
-	// Wait until at least one thread messages the finished channel
-	<-clnt.Finished
-	fmt.Printf("Connection to %s closed.\n", clnt.RawHostname)
+	// Wait for some signal that the session should end
+	control = <-clnt.sessionControl
+	return control.exitError
 }
 
-// Ping is a blocking function that streams an infinite series of pings to the server,
-// until it receives an interrupt from the user.
+// Sends an infinite series of pings to the server until it receives an interrupt from the user.
 func (clnt *Client) Ping() {
-	if !clnt.Host.IsListening(clnt.RemoteHostname) {
-		clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
+	if !clnt.Host.IsListening(clnt.remoteHostname) {
+		clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.rawRemoteHostname), false)
 		return
 	}
 	start := time.Now()
-	msg := drshproto.Message{
-		Type:   drshproto.Message_PING_REQUEST,
+	msg := drshproto.PublicMessage{
+		Type:   drshproto.PublicMessage_PING_REQUEST,
 		Sender: clnt.Host.Hostname,
 	}
 	intr := make(chan os.Signal, 1)
@@ -343,30 +383,30 @@ func (clnt *Client) Ping() {
 		for range intr {
 			loss := (sentCnt - recvCnt) * 100 / sentCnt
 			totalDuration := time.Now().Sub(start)
-			fmt.Printf("\n--- %s ping statistics ---\n", clnt.RawHostname)
+			fmt.Printf("\n--- %s ping statistics ---\n", clnt.rawRemoteHostname)
 			fmt.Printf("%d packets transmitted, %d received, %d%% packet loss, time %s\n", sentCnt, recvCnt, loss, totalDuration)
 			fmt.Printf("rtt min/max %s/%s\n", minDuration, maxDuration)
 			os.Exit(0)
 		}
 	}()
-	fmt.Printf("PING %s %d data bytes\n", clnt.RawHostname, proto.Size(&msg))
+	fmt.Printf("PING %s %d data bytes\n", clnt.rawRemoteHostname, proto.Size(&msg))
 	for {
-		if !clnt.Host.IsListening(clnt.RemoteHostname) {
-			clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.RawHostname), false)
+		if !clnt.Host.IsListening(clnt.remoteHostname) {
+			clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.rawRemoteHostname), false)
 			break
 		}
 		sentTime := time.Now()
-		clnt.Host.SendMessage(clnt.RemoteHostname, msg)
+		clnt.Host.SendPublicMessage(clnt.remoteHostname, msg)
 		sentCnt++
 		var resp pingResponse
 		for {
-			resp = <-clnt.Pinged
-			if resp.Sender == clnt.RemoteHostname {
+			resp = <-clnt.pingResponses
+			if resp.sender == clnt.remoteHostname {
 				break
 			}
 		}
 		recvCnt++
-		recvDuration := resp.RecvTime.Sub(sentTime)
+		recvDuration := resp.recvTime.Sub(sentTime)
 		if recvDuration < minDuration || first {
 			minDuration = recvDuration
 		}
@@ -374,7 +414,7 @@ func (clnt *Client) Ping() {
 			maxDuration = recvDuration
 		}
 		first = false
-		fmt.Printf("%d bytes from %s: time=%s\n", resp.Size, clnt.RawHostname, recvDuration)
+		fmt.Printf("%d bytes from %s: time=%s\n", resp.size, clnt.rawRemoteHostname, recvDuration)
 		time.Sleep(1 * time.Second)
 	}
 }
@@ -392,10 +432,37 @@ func (clnt *Client) startTimeoutHandler() {
 	}
 }
 
-// Start is a non-blocking function that enables client packet processing.
+func (clnt *Client) startFileTransferHandler() {
+	for {
+		if !clnt.Host.IsOpen() {
+			break
+		}
+		buf := make([]byte, 4096)
+		cnt, err := clnt.transferFile.Read(buf)
+		if err != nil {
+			if err != io.EOF {
+				clnt.handleExit(err, true)
+			} else {
+				clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
+					Type:   drshproto.SessionMessage_FILE_CLOSE,
+					Sender: clnt.Host.Hostname,
+				})
+			}
+			break
+		}
+		clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
+			Type:        drshproto.SessionMessage_FILE_CHUNK,
+			Sender:      clnt.Host.Hostname,
+			FilePayload: buf[:cnt],
+		})
+	}
+}
+
+// Start is a non-blocking function that enables client message processing.
 func (clnt *Client) Start() {
-	go clnt.startTimeoutHandler()
 	clnt.Host.Start()
+	go clnt.startTimeoutHandler()
+	go clnt.startMessageHandler()
 }
 
 // Close is called to destroy the client's Redis connection and perform cleanup.
