@@ -105,7 +105,7 @@ func (session *Session) isExpired() bool {
 
 func (session *Session) handleHeartbeat() {
 	session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
-		Type:   drshproto.SessionMessage_HEARTBEAT_SERVER,
+		Type:   drshproto.SessionMessage_HEARTBEAT_RESPONSE,
 		Sender: session.Host.Hostname,
 	})
 }
@@ -138,7 +138,7 @@ func (session *Session) handlePtyWinch(rows uint16, cols uint16, xpixels uint16,
 	session.ptyResizeFlag = true
 }
 
-func (session *Session) handleFileTransfer(payload []byte) {
+func (session *Session) handleFileChunk(payload []byte) {
 	if session.mode == drshproto.SessionMode_MODE_FILE_UPLOAD && session.transferFile != nil {
 		_, err := session.transferFile.Write(payload)
 		if err != nil {
@@ -147,7 +147,7 @@ func (session *Session) handleFileTransfer(payload []byte) {
 	}
 }
 
-func (session *Session) handleFileTransferFinish() {
+func (session *Session) handleFileClose() {
 	if session.mode == drshproto.SessionMode_MODE_FILE_UPLOAD && session.transferFile != nil {
 		session.handleExit(nil, true)
 	}
@@ -174,14 +174,14 @@ func (session *Session) handleExit(err error, ack bool) {
 	session.Close()
 }
 
-func (session *Session) handleParam(mode drshproto.SessionMode, username string, filename string) {
-	// Parameters are only allowed to be set when the session is in waiting mode
+func (session *Session) handleBootstrap(mode drshproto.SessionMode, username string, filename string) {
+	// Session must be waiting in order for the bootstrapping process to begin
 	if session.mode != drshproto.SessionMode_MODE_WAITING {
 		return
 	}
 	valid := false
 	resp := drshproto.SessionMessage{
-		Type:   drshproto.SessionMessage_PARAM_RESPONSE,
+		Type:   drshproto.SessionMessage_BOOTSTRAP_RESPONSE,
 		Sender: session.Host.Hostname,
 	}
 	if mode == drshproto.SessionMode_MODE_PTY {
@@ -198,7 +198,7 @@ func (session *Session) handleParam(mode drshproto.SessionMode, username string,
 		session.ptyFile = ptmx
 		session.ptyResizeFlag = false
 		valid = true
-		resp.ParamMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(session.servHostname, "se-") + " via drsh.\n"
+		resp.BootstrapMotd = drshutil.Motd() + "Logged in successfully to " + strings.TrimPrefix(session.servHostname, "se-") + " via drsh.\n"
 	} else if mode == drshproto.SessionMode_MODE_FILE_UPLOAD || mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
 		// Adjust remote filename to be relative to current user's home directory
 		// filepath.Abs is relative to the working directory, so the WD needs to be temporarily set
@@ -268,25 +268,25 @@ func (session *Session) startMessageHandler() {
 		}
 		session.refreshExpiry()
 		switch msg.GetType() {
-		case drshproto.SessionMessage_HEARTBEAT_CLIENT:
+		case drshproto.SessionMessage_HEARTBEAT_REQUEST:
 			session.handleHeartbeat()
 		case drshproto.SessionMessage_PTY_INPUT:
 			session.handlePtyInput(msg.GetPtyPayload())
 		case drshproto.SessionMessage_PTY_WINCH:
 			dims := drshutil.Unpack64(msg.GetPtyDimensions())
 			session.handlePtyWinch(dims[0], dims[1], dims[2], dims[3])
-		case drshproto.SessionMessage_FILE_TRANSFER:
-			session.handleFileTransfer(msg.GetFilePayload())
-		case drshproto.SessionMessage_FILE_TRANSFER_FINISH:
-			session.handleFileTransferFinish()
+		case drshproto.SessionMessage_FILE_CHUNK:
+			session.handleFileChunk(msg.GetFilePayload())
+		case drshproto.SessionMessage_FILE_CLOSE:
+			session.handleFileClose()
 		case drshproto.SessionMessage_EXIT:
 			if msg.ExitNormal {
 				session.handleExit(nil, false)
 			} else {
 				session.handleExit(fmt.Errorf("client refused connection: %s", msg.ExitError), false)
 			}
-		case drshproto.SessionMessage_PARAM_REQUEST:
-			session.handleParam(msg.GetParamMode(), msg.GetParamUsername(), msg.GetParamFilename())
+		case drshproto.SessionMessage_BOOTSTRAP_REQUEST:
+			session.handleBootstrap(msg.GetBootstrapMode(), msg.GetBootstrapUsername(), msg.GetBootstrapFilename())
 		default:
 			session.Host.Logger.Warnf("Received invalid message from '%s'.", msg.GetSender())
 		}
@@ -302,14 +302,14 @@ func (session *Session) startFileTransferHandler() {
 				session.handleExit(err, true)
 			} else {
 				session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
-					Type:   drshproto.SessionMessage_FILE_TRANSFER_FINISH,
+					Type:   drshproto.SessionMessage_FILE_CLOSE,
 					Sender: session.Host.Hostname,
 				})
 			}
 			break
 		}
 		session.Host.SendSessionMessage(session.clientHostname, drshproto.SessionMessage{
-			Type:        drshproto.SessionMessage_FILE_TRANSFER,
+			Type:        drshproto.SessionMessage_FILE_CHUNK,
 			Sender:      session.Host.Hostname,
 			FilePayload: buf[:cnt],
 		})

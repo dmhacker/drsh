@@ -112,7 +112,7 @@ func (clnt *Client) handleSession(sender string, success bool, err string, keyPa
 	}
 }
 
-func (clnt *Client) handleParam(sender string, motd string) {
+func (clnt *Client) handleBootstrap(sender string, motd string) {
 	if clnt.sessionMode == drshproto.SessionMode_MODE_WAITING && sender == clnt.sessionHostname {
 		fmt.Print(motd)
 		clnt.sessionMode = clnt.sessionProposedMode
@@ -132,7 +132,7 @@ func (clnt *Client) handlePtyOutput(sender string, payload []byte) {
 	}
 }
 
-func (clnt *Client) handleFileTransfer(sender string, payload []byte) {
+func (clnt *Client) handleFileChunk(sender string, payload []byte) {
 	if clnt.sessionMode == drshproto.SessionMode_MODE_FILE_DOWNLOAD && sender == clnt.sessionHostname && clnt.transferFile != nil {
 		_, err := clnt.transferFile.Write(payload)
 		if err != nil {
@@ -141,7 +141,7 @@ func (clnt *Client) handleFileTransfer(sender string, payload []byte) {
 	}
 }
 
-func (clnt *Client) handleFileTransferFinish(sender string) {
+func (clnt *Client) handleFileClose(sender string) {
 	if clnt.sessionMode == drshproto.SessionMode_MODE_FILE_DOWNLOAD && sender == clnt.sessionHostname && clnt.transferFile != nil {
 		clnt.handleExit(nil, true)
 	}
@@ -188,22 +188,22 @@ func (clnt *Client) startMessageHandler() {
 		} else if smsg != nil {
 			clnt.refreshExpiry()
 			switch smsg.GetType() {
-			case drshproto.SessionMessage_HEARTBEAT_SERVER:
-				// Heartbeats don't require any processing other than timestamping
+			case drshproto.SessionMessage_HEARTBEAT_RESPONSE:
+				// Heartbeats don't require any processing
 			case drshproto.SessionMessage_PTY_OUTPUT:
 				clnt.handlePtyOutput(smsg.GetSender(), smsg.GetPtyPayload())
-			case drshproto.SessionMessage_FILE_TRANSFER:
-				clnt.handleFileTransfer(smsg.GetSender(), smsg.GetFilePayload())
-			case drshproto.SessionMessage_FILE_TRANSFER_FINISH:
-				clnt.handleFileTransferFinish(smsg.GetSender())
+			case drshproto.SessionMessage_FILE_CHUNK:
+				clnt.handleFileChunk(smsg.GetSender(), smsg.GetFilePayload())
+			case drshproto.SessionMessage_FILE_CLOSE:
+				clnt.handleFileClose(smsg.GetSender())
 			case drshproto.SessionMessage_EXIT:
 				if smsg.ExitNormal {
 					clnt.handleExit(nil, false)
 				} else {
 					clnt.handleExit(fmt.Errorf("server refused connection: %s", smsg.ExitError), false)
 				}
-			case drshproto.SessionMessage_PARAM_RESPONSE:
-				clnt.handleParam(smsg.GetSender(), smsg.GetParamMotd())
+			case drshproto.SessionMessage_BOOTSTRAP_RESPONSE:
+				clnt.handleBootstrap(smsg.GetSender(), smsg.GetBootstrapMotd())
 			default:
 				clnt.Host.Logger.Warnf("Received invalid message from '%s'.", smsg.GetSender())
 			}
@@ -233,11 +233,11 @@ func (clnt *Client) startSession() {
 func (clnt *Client) configureSession(mode drshproto.SessionMode, filename string) {
 	clnt.sessionProposedMode = mode
 	clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
-		Type:          drshproto.SessionMessage_PARAM_REQUEST,
-		Sender:        clnt.Host.Hostname,
-		ParamMode:     mode,
-		ParamUsername: clnt.remoteUsername,
-		ParamFilename: filename,
+		Type:              drshproto.SessionMessage_BOOTSTRAP_REQUEST,
+		Sender:            clnt.Host.Hostname,
+		BootstrapMode:     mode,
+		BootstrapUsername: clnt.remoteUsername,
+		BootstrapFilename: filename,
 	})
 }
 
@@ -271,14 +271,14 @@ func (clnt *Client) UploadFile(localFilename string, remoteFilename string) erro
 					clnt.handleExit(err, true)
 				} else {
 					clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
-						Type:   drshproto.SessionMessage_FILE_TRANSFER_FINISH,
+						Type:   drshproto.SessionMessage_FILE_CLOSE,
 						Sender: clnt.Host.Hostname,
 					})
 				}
 				break
 			}
 			clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
-				Type:        drshproto.SessionMessage_FILE_TRANSFER,
+				Type:        drshproto.SessionMessage_FILE_CHUNK,
 				Sender:      clnt.Host.Hostname,
 				FilePayload: buf[:cnt],
 			})
@@ -365,7 +365,7 @@ func (clnt *Client) LoginInteractively() error {
 	go (func() {
 		for {
 			clnt.Host.SendSessionMessage(clnt.sessionHostname, drshproto.SessionMessage{
-				Type:   drshproto.SessionMessage_HEARTBEAT_CLIENT,
+				Type:   drshproto.SessionMessage_HEARTBEAT_REQUEST,
 				Sender: clnt.Host.Hostname,
 			})
 			time.Sleep(60 * time.Second)

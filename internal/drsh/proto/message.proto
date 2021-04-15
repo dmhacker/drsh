@@ -38,15 +38,15 @@ message PublicMessage {
 message SessionMessage {
   enum MessageType {
     EXIT = 0; // C->S, S->C, sent by either party to indicate session is closed
-    PARAM_REQUEST = 1; // C->S, client starts by requesting that the session follow these parameters
-    PARAM_RESPONSE = 2; // S->C, server acknowledges that it will respect the client's wishes
-    HEARTBEAT_CLIENT = 3; // C->S, empty message to signal that client is still active
-    HEARTBEAT_SERVER = 4; // S->C, empty message to signal that server is still active
+    BOOTSTRAP_REQUEST = 1; // C->S, client starts by requesting that the session follow some parameters
+    BOOTSTRAP_RESPONSE = 2; // S->C, server acknowledges that it will respect the client's wishes
+    HEARTBEAT_REQUEST = 3; // C->S, empty message to signal that client is still active
+    HEARTBEAT_RESPONSE = 4; // S->C, empty message to signal that server is still active
     PTY_INPUT = 5; // C->S, client is sending commands to the server's PTY
     PTY_WINCH = 6; // C->S, client wants to adjust the size of the server's PTY
     PTY_OUTPUT = 7; // S->C, server is sending output from its PTY
-    FILE_TRANSFER = 8; // S->C, C->S, the party sending a file uses this message to transfer data
-    FILE_TRANSFER_FINISH = 9; // S->C, C->S, the party sending a file indicates that they are done
+    FILE_CHUNK = 8; // S->C, C->S, the party sending a file uses this message to transfer data
+    FILE_CLOSE = 9; // S->C, C->S, the party sending a file indicates that they are done
   }
   // All messages
   MessageType type = 1;
@@ -54,16 +54,16 @@ message SessionMessage {
   // Exit messages
   bool exit_normal = 3; // Sending party specifies if they are exiting normally
   string exit_error = 4; // Sending party specifies that they are exiting because of an error
-  // Parameter messages
-  SessionMode param_mode = 5; // Client requests that the session be of this mode
-  string param_username = 6; // Client requests that the session be tied to this user account
-  string param_filename = 7; // Client requests that the session prepare this remote file for transfer
-  string param_motd = 8; // Server provides a MOTD to be displayed to the client
+  // Bootstrap messages
+  SessionMode bootstrap_mode = 5; // Client requests that the session be of this mode
+  string bootstrap_username = 6; // Client requests that the session be tied to this user account
+  string bootstrap_filename = 7; // Client requests that the session prepare this remote file for transfer
+  string bootstrap_motd = 8; // Server provides a MOTD to be displayed to the client
   // PTY messages
-  bytes pty_payload = 9; // used by PTY_INPUT, PTY_OUTPUT messages
-  uint64 pty_dimensions = 10; // used by PTY_WINCH message
+  bytes pty_payload = 9; // Used by PTY_INPUT, PTY_OUTPUT messages
+  uint64 pty_dimensions = 10; // Used by PTY_WINCH message
   // File messages
-  bytes file_payload = 11; // used by FILE_TRANSFER message
+  bytes file_payload = 11; // Used by FILE_CHUNK message
 }
 
 // An encrypted session message contains a session message in ciphertext format.
