@@ -29,6 +29,7 @@ type Client struct {
 	rawRemoteHostname    string
 	remoteUsername       string
 	remoteHostname       string
+	connectedFlag        bool
 	connectedSession     string
 	pinged               chan pingResponse
 	connected            chan bool
@@ -89,24 +90,24 @@ func (clnt *Client) handleSession(sender string, success bool, err string, keyPa
 		clnt.handleExit(fmt.Errorf("server refused connection: %s", err), false)
 		return
 	}
-	if !clnt.Host.IsSession() && sender == clnt.remoteHostname {
+	if !clnt.connectedFlag && sender == clnt.remoteHostname {
 		err := clnt.Host.Encryption.CompleteKeyExchange(keyPart)
 		if err != nil {
 			clnt.handleExit(err, false)
 			return
 		}
 		clnt.Host.Encryption.FreePrivateKeys()
-		clnt.Host.SetSession(true)
 		if clnt.displayMotd {
 			fmt.Print(motd)
 		}
+		clnt.connectedFlag = true
 		clnt.connectedSession = session
 		clnt.connected <- true
 	}
 }
 
 func (clnt *Client) handlePtyOutput(sender string, payload []byte) {
-	if clnt.Host.IsSession() && sender == clnt.connectedSession {
+	if clnt.connectedFlag && sender == clnt.connectedSession {
 		_, err := os.Stdout.Write(payload)
 		if err != nil {
 			clnt.handleExit(err, true)
@@ -115,7 +116,7 @@ func (clnt *Client) handlePtyOutput(sender string, payload []byte) {
 }
 
 func (clnt *Client) handleFileTransfer(sender string, payload []byte) {
-	if clnt.Host.IsSession() && sender == clnt.connectedSession && clnt.transferFile != nil {
+	if clnt.connectedFlag && sender == clnt.connectedSession && clnt.transferFile != nil {
 		_, err := clnt.transferFile.Write(payload)
 		if err != nil {
 			clnt.handleExit(err, true)
@@ -124,7 +125,7 @@ func (clnt *Client) handleFileTransfer(sender string, payload []byte) {
 }
 
 func (clnt *Client) handleFileTransferFinish(sender string) {
-	if clnt.Host.IsSession() && sender == clnt.connectedSession && clnt.transferFile != nil {
+	if clnt.connectedFlag && sender == clnt.connectedSession && clnt.transferFile != nil {
 		clnt.handleExit(nil, true)
 	}
 }
@@ -136,7 +137,7 @@ func (clnt *Client) handleExit(err error, ack bool) {
 	} else {
 		clnt.Host.Logger.Info("Client exited normally.")
 	}
-	if clnt.Host.IsSession() {
+	if clnt.connectedFlag {
 		if ack {
 			clnt.Host.SendSessionMessage(clnt.connectedSession, drshproto.SessionMessage{
 				Type:   drshproto.SessionMessage_EXIT,
@@ -151,37 +152,41 @@ func (clnt *Client) handleExit(err error, ack bool) {
 	}
 }
 
-func (clnt *Client) startPublicMessageReceiver() {
-	for msg := range clnt.Host.incomingPublicMessages {
-		switch msg.GetType() {
-		case drshproto.PublicMessage_PING_RESPONSE:
-			clnt.handlePing(msg.GetSender(), proto.Size(&msg))
-		case drshproto.PublicMessage_SESSION_RESPONSE:
-			clnt.handleSession(msg.GetSender(), msg.GetSessionCreated(), msg.GetSessionError(), msg.GetSessionKeyPart(), msg.GetSessionId(), msg.GetSessionMotd())
-		default:
-			clnt.Host.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
+func (clnt *Client) startMessageReceiver() {
+	for imsg := range clnt.Host.incomingMessages {
+        pmsg := clnt.Host.GetPublicMessage(imsg)
+        smsg, err := clnt.Host.GetSessionMessage(imsg)
+        if err != nil {
+			clnt.Host.Logger.Warnf("Failed to get session message: %s", err)
+            continue
+        }
+		if pmsg != nil {
+			switch pmsg.GetType() {
+			case drshproto.PublicMessage_PING_RESPONSE:
+				clnt.handlePing(pmsg.GetSender(), proto.Size(pmsg))
+			case drshproto.PublicMessage_SESSION_RESPONSE:
+				clnt.handleSession(pmsg.GetSender(), pmsg.GetSessionCreated(), pmsg.GetSessionError(), pmsg.GetSessionKeyPart(), pmsg.GetSessionId(), pmsg.GetSessionMotd())
+			default:
+				clnt.Host.Logger.Warnf("Received invalid packet from '%s'.", pmsg.GetSender())
+			}
+		} else if smsg != nil {
+			clnt.refreshExpiry()
+			switch smsg.GetType() {
+			case drshproto.SessionMessage_HEARTBEAT_SERVER:
+				// Heartbeats don't require any processing other than timestamping
+			case drshproto.SessionMessage_PTY_OUTPUT:
+				clnt.handlePtyOutput(smsg.GetSender(), smsg.GetPtyPayload())
+			case drshproto.SessionMessage_FILE_TRANSFER:
+				clnt.handleFileTransfer(smsg.GetSender(), smsg.GetFilePayload())
+			case drshproto.SessionMessage_FILE_TRANSFER_FINISH:
+				clnt.handleFileTransferFinish(smsg.GetSender())
+			case drshproto.SessionMessage_EXIT:
+				clnt.handleExit(nil, false)
+			default:
+				clnt.Host.Logger.Warnf("Received invalid packet from '%s'.", smsg.GetSender())
+			}
 		}
-	}
 
-}
-
-func (clnt *Client) startSessionMessageReceiver() {
-	for msg := range clnt.Host.incomingSessionMessages {
-		clnt.refreshExpiry()
-		switch msg.GetType() {
-		case drshproto.SessionMessage_HEARTBEAT_SERVER:
-			// Heartbeats don't require any processing other than timestamping
-		case drshproto.SessionMessage_PTY_OUTPUT:
-			clnt.handlePtyOutput(msg.GetSender(), msg.GetPtyPayload())
-		case drshproto.SessionMessage_FILE_TRANSFER:
-			clnt.handleFileTransfer(msg.GetSender(), msg.GetFilePayload())
-		case drshproto.SessionMessage_FILE_TRANSFER_FINISH:
-			clnt.handleFileTransferFinish(msg.GetSender())
-		case drshproto.SessionMessage_EXIT:
-			clnt.handleExit(nil, false)
-		default:
-			clnt.Host.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
-		}
 	}
 }
 
@@ -358,7 +363,7 @@ func (clnt *Client) Ping() {
 	}()
 	fmt.Printf("PING %s %d data bytes\n", clnt.rawRemoteHostname, proto.Size(&msg))
 	for {
-		if !clnt.Host.IsListening(clnt.rawRemoteHostname) {
+		if !clnt.Host.IsListening(clnt.remoteHostname) {
 			clnt.handleExit(fmt.Errorf("host '%s' does not exist or is offline", clnt.rawRemoteHostname), false)
 			break
 		}
@@ -401,8 +406,9 @@ func (clnt *Client) startTimeoutHandler() {
 
 // Start is a non-blocking function that enables client packet processing.
 func (clnt *Client) Start() {
-	go clnt.startTimeoutHandler()
 	clnt.Host.Start()
+	go clnt.startTimeoutHandler()
+	go clnt.startMessageReceiver()
 }
 
 // Close is called to destroy the client's Redis connection and perform cleanup.

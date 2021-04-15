@@ -9,10 +9,9 @@ enum SessionMode {
   MODE_FILE_DOWNLOAD = 2;
 }
 
-// A PublicMessage is sent without encryption between any server and client.
-// They are essentially ephmereal messages that require minimal or no state to be kept on the server.
-// Note that anyone on the Internet can sniff these messages, so no sensitive information should
-// be transferred here.
+// Public messages are sent without encryption between any server and client.
+// They are ephmereal messages that require minimal or no state to be kept on the server.
+// Sensitive information should not be transferred here.
 message PublicMessage {
   enum MessageType {
     READY = 0; // C->C, S->S, used to test that Redis is delivering messages
@@ -35,28 +34,20 @@ message PublicMessage {
   string session_motd = 10; // Server provides a MOTD to be displayed to the client
 }
 
-// An EncryptedMessage represents some ciphertext transferred between server and client. This
-// is mainly intended for protecting sessions.
-message EncryptedMessage {
-  bytes ciphertext = 1;
-  bytes nonce = 2;
-}
-
-// A SessionMessage is sent with encryption between a server session and corresponding client.
-// The SessionMessage doesn't carry any encryption parameters itself; instead, it's assumed to be wrapped in
-// an EncryptedMessage. SessionMessages implement core logic associated with client actions, such as
+// Session messages are sent with encryption guarantees between a server and client.
+// All session messages are assumed to be in a ciphertext format in transit.
+// Thus, they can implement core logic associated with sensitive actions, such as
 // transferring files, sending commands to a server as a user, etc.
 message SessionMessage {
   enum MessageType {
-    READY = 0; // C->C, S->S, used to test that Redis is delivering messages
-    EXIT = 1; // C->S, S->C, sent by either party to indicate session is closed
-    HEARTBEAT_CLIENT = 2; // C->S, empty message to signal that client is still active
-    HEARTBEAT_SERVER = 3; // S->C, empty message to signal that server is still active
-    PTY_INPUT = 4; // C->S, client is sending commands to the server's PTY
-    PTY_WINCH = 5; // C->S, client wants to adjust the size of the server's PTY 
-    PTY_OUTPUT = 6; // S->C, server is sending output from its PTY
-    FILE_TRANSFER = 7; // S->C, C->S, the party sending a file uses this message to transfer data
-    FILE_TRANSFER_FINISH = 8; // S->C, C->S, the party sending a file indicates that they are done
+    EXIT = 0; // C->S, S->C, sent by either party to indicate session is closed
+    HEARTBEAT_CLIENT = 1; // C->S, empty message to signal that client is still active
+    HEARTBEAT_SERVER = 2; // S->C, empty message to signal that server is still active
+    PTY_INPUT = 3; // C->S, client is sending commands to the server's PTY
+    PTY_WINCH = 4; // C->S, client wants to adjust the size of the server's PTY 
+    PTY_OUTPUT = 5; // S->C, server is sending output from its PTY
+    FILE_TRANSFER = 6; // S->C, C->S, the party sending a file uses this message to transfer data
+    FILE_TRANSFER_FINISH = 7; // S->C, C->S, the party sending a file indicates that they are done
   }
   // All messages
   MessageType type = 1;
@@ -69,4 +60,18 @@ message SessionMessage {
   uint64 pty_dimensions = 6; // used by PTY_WINCH message
   // File messages
   bytes file_payload = 13; // used by FILE_TRANSFER message
+}
+
+// An encrypted session message contains a session message in ciphertext format.
+message EncryptedSessionMessage {
+  bytes ciphertext = 1;
+  bytes nonce = 2;
+}
+
+// Any message in transit must be in one of the following formats.
+message Message {
+    oneof wrapper {
+        PublicMessage public_message = 1;
+        EncryptedSessionMessage encrypted_session_message = 2;
+    }
 }

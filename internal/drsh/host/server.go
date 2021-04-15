@@ -44,7 +44,7 @@ func (serv *Server) handleSession(sender string, keyPart []byte, mode drshproto.
 	if err != nil {
 		serv.Host.Logger.Warnf("Failed to setup session with '%s': %s", sender, err)
 		resp.SessionCreated = false
-        resp.SessionError = err.Error()
+		resp.SessionError = err.Error()
 		serv.Host.SendPublicMessage(sender, resp)
 	} else {
 		serv.Host.Logger.Infof("'%s' has joined session %s.", sender, session.Host.Hostname)
@@ -59,27 +59,30 @@ func (serv *Server) handleSession(sender string, keyPart []byte, mode drshproto.
 }
 
 func (serv *Server) startMessageHandler() {
-    for msg := range serv.Host.incomingPublicMessages {
-        switch msg.GetType() {
-        case drshproto.PublicMessage_PING_REQUEST:
-            serv.handlePing(msg.GetSender())
-        case drshproto.PublicMessage_SESSION_REQUEST:
-            serv.handleSession(msg.GetSender(), msg.GetSessionKeyPart(), msg.GetSessionMode(), msg.GetSessionUser(), msg.GetSessionFilename())
-        default:
-            serv.Host.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
-        }
-    }
+	for imsg := range serv.Host.incomingMessages {
+		msg := serv.Host.GetPublicMessage(imsg)
+		if msg == nil {
+			serv.Host.Logger.Warnf("Server %s only accepts public messages.", serv.Host.Hostname)
+			continue
+		}
+		switch msg.GetType() {
+		case drshproto.PublicMessage_PING_REQUEST:
+			serv.handlePing(msg.GetSender())
+		case drshproto.PublicMessage_SESSION_REQUEST:
+			serv.handleSession(msg.GetSender(), msg.GetSessionKeyPart(), msg.GetSessionMode(), msg.GetSessionUser(), msg.GetSessionFilename())
+		default:
+			serv.Host.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
+		}
+	}
 }
 
 // Non-blocking function that enables server packet processing.
 func (serv *Server) Start() {
-    go serv.startMessageHandler()
 	serv.Host.Start()
+	go serv.startMessageHandler()
 }
 
 // Destroys the server's Redis connection and perform cleanup.
 func (serv *Server) Close() {
 	serv.Host.Close()
 }
-
-

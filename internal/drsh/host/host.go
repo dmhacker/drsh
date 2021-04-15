@@ -24,20 +24,19 @@ type outgoingMessage struct {
 // It tries to hide the full functionality of Redis by only exposing functions
 // related to sending and receiving drsh messages.
 type RedisHost struct {
-	Hostname                string                        // The name of this host (e.g. what channel this host is listening on)
-	Logger                  *zap.SugaredLogger            // The logger attached to this host
-	Encryption              drshutil.EncryptionModule     // Responsible for performing key exchange, symmetric encryption, etc.
-	incomingPublicMessages  chan drshproto.PublicMessage  // If not in a session, then any incoming messages can be read through this channel
-	incomingSessionMessages chan drshproto.SessionMessage // If in a session, then any incoming messages can be read through this channel
-	outgoingMessages        chan outgoingMessage          // Any messages sent through this channel are sent to other Redis hosts
-	rclient                 *redis.Client                 // The Redis client attached to this host
-	rpubsub                 *redis.PubSub                 // The Redis channel the client is listening on
-	readyMtx                sync.Mutex                    // Used to signal that this host is correctly sending & receiving Redis messages
-	readyFlag               bool                          // Used to signal that this host is correctly sending & receiving Redis messages
-	readyCnd                *sync.Cond                    // Used to signal that this host is correctly sending & receiving Redis messages
-	childFlag               bool                          // Is true if this host is a child of another host (borrowing resources)
-	openFlag                drshutil.AtomicBoolean        // Is true if this host is still connected to Redis
-	sessionFlag             drshutil.AtomicBoolean        // Is true if the host is currently involved in an encrypted session
+	Hostname         string                    // The name of this host (e.g. what channel this host is listening on)
+	Logger           *zap.SugaredLogger        // The logger attached to this host
+	Encryption       drshutil.EncryptionModule // Responsible for performing key exchange, symmetric encryption, etc.
+	incomingMessages chan drshproto.Message    // Any incoming messages can be read through this channel
+	outgoingMessages chan outgoingMessage      // Any messages sent through this channel are sent to other Redis hosts
+	rclient          *redis.Client             // The Redis client attached to this host
+	rpubsub          *redis.PubSub             // The Redis channel the client is listening on
+	readyMtx         sync.Mutex                // Used to signal that this host is correctly sending & receiving Redis messages
+	readyFlag        bool                      // Used to signal that this host is correctly sending & receiving Redis messages
+	readyCnd         *sync.Cond                // Used to signal that this host is correctly sending & receiving Redis messages
+	childFlag        bool                      // Is true if this host is a child of another host (borrowing resources)
+	openFlag         drshutil.AtomicBoolean    // Is true if this host is still connected to Redis
+	sessionFlag      drshutil.AtomicBoolean    // Is true if the host is currently involved in an encrypted session
 }
 
 var ctx = context.Background()
@@ -54,17 +53,16 @@ func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger) (*Redi
 		return nil, err
 	}
 	host := RedisHost{
-		Hostname:                hostname,
-		Logger:                  logger,
-		Encryption:              drshutil.NewEncryptionModule(),
-		incomingPublicMessages:  make(chan drshproto.PublicMessage, 10),
-		incomingSessionMessages: make(chan drshproto.SessionMessage, 10),
-		outgoingMessages:        make(chan outgoingMessage, 10),
-		rclient:                 redis.NewClient(opt),
-		readyFlag:               false,
-		childFlag:               false,
-		openFlag:                drshutil.NewAtomicBoolean(true),
-		sessionFlag:             drshutil.NewAtomicBoolean(false),
+		Hostname:         hostname,
+		Logger:           logger,
+		Encryption:       drshutil.NewEncryptionModule(),
+		incomingMessages: make(chan drshproto.Message, 10),
+		outgoingMessages: make(chan outgoingMessage, 10),
+		rclient:          redis.NewClient(opt),
+		readyFlag:        false,
+		childFlag:        false,
+		openFlag:         drshutil.NewAtomicBoolean(true),
+		sessionFlag:      drshutil.NewAtomicBoolean(false),
 	}
 	host.readyCnd = sync.NewCond(&host.readyMtx)
 	err = host.rclient.Ping(ctx).Err()
@@ -86,17 +84,15 @@ func NewChildRedisHost(hostname string, parent *RedisHost) (*RedisHost, error) {
 		return nil, fmt.Errorf("hostname cannot be empty")
 	}
 	child := RedisHost{
-		Hostname:                hostname,
-		Logger:                  parent.Logger,
-		Encryption:              drshutil.NewEncryptionModule(),
-		incomingPublicMessages:  make(chan drshproto.PublicMessage, 10),
-		incomingSessionMessages: make(chan drshproto.SessionMessage, 10),
-		outgoingMessages:        make(chan outgoingMessage, 10),
-		rclient:                 parent.rclient,
-		readyFlag:               false,
-		childFlag:               false,
-		openFlag:                drshutil.NewAtomicBoolean(true),
-		sessionFlag:             drshutil.NewAtomicBoolean(false),
+		Hostname:         hostname,
+		Logger:           parent.Logger,
+		Encryption:       drshutil.NewEncryptionModule(),
+		incomingMessages: make(chan drshproto.Message, 10),
+		outgoingMessages: make(chan outgoingMessage, 10),
+		rclient:          parent.rclient,
+		readyFlag:        false,
+		childFlag:        true,
+		openFlag:         drshutil.NewAtomicBoolean(true),
 	}
 	child.readyCnd = sync.NewCond(&child.readyMtx)
 	err := child.rclient.Ping(ctx).Err()
@@ -116,16 +112,6 @@ func (host *RedisHost) IsOpen() bool {
 	return host.openFlag.Get()
 }
 
-// Returns whether or not the host is involved in a session.
-func (host *RedisHost) IsSession() bool {
-	return host.sessionFlag.Get()
-}
-
-// Sets the status of host as potentially being involved in a session.
-func (host *RedisHost) SetSession(session bool) {
-	host.sessionFlag.Set(session)
-}
-
 // Returns whether or not a host with this name is listening on the network.
 // A listening host means that the host is subscribed to its channel. It is a necessary
 // but not sufficient condition for host communication, as the other host must be
@@ -136,14 +122,7 @@ func (host *RedisHost) IsListening(hostname string) bool {
 }
 
 // A thread-safe way to send public messages to another host on the network.
-// If the host is in session mode, then it should only be communicating in a secure manner
-// via encrypted session messages, so public messages cannot be sent in parallel.
 func (host *RedisHost) SendPublicMessage(recipient string, msg drshproto.PublicMessage) {
-	// If this is triggered, then the protocol has failed in some way
-	if host.IsSession() {
-		host.Logger.Panicf("Cannot send a public message in session mode: %v", msg)
-		return
-	}
 	host.outgoingMessages <- outgoingMessage{
 		recipient:      recipient,
 		publicMessage:  &msg,
@@ -152,15 +131,9 @@ func (host *RedisHost) SendPublicMessage(recipient string, msg drshproto.PublicM
 	}
 }
 
-// If the host is in session mode, then the host can send encrypted session messages
-// to users in the session. Session mode is a requirement, because it implies that
-// a mutual encryption key has been established via a handshake.
+// A thread-safe way to send session messages to another host on the network.
+// The session messages will be encrypted with a mutually derived key.
 func (host *RedisHost) SendSessionMessage(recipient string, msg drshproto.SessionMessage) {
-	// If this is triggered, then the protocol has failed in some way
-	if !host.IsSession() {
-		host.Logger.Panicf("Cannot send a session message in public mode: %v", msg)
-		return
-	}
 	host.outgoingMessages <- outgoingMessage{
 		recipient:      recipient,
 		publicMessage:  nil,
@@ -169,39 +142,68 @@ func (host *RedisHost) SendSessionMessage(recipient string, msg drshproto.Sessio
 	}
 }
 
+// Attempts to extract the public component of the message if it exists.
+func (host *RedisHost) GetPublicMessage(mmsg drshproto.Message) *drshproto.PublicMessage {
+	switch mmsg.Wrapper.(type) {
+	case *drshproto.Message_PublicMessage:
+		return mmsg.GetPublicMessage()
+	}
+	return nil
+}
+
+// Attempts to extract the session component of the message if it exists.
+func (host *RedisHost) GetSessionMessage(mmsg drshproto.Message) (*drshproto.SessionMessage, error) {
+	switch mmsg.Wrapper.(type) {
+	case *drshproto.Message_EncryptedSessionMessage:
+		emsg := mmsg.GetEncryptedSessionMessage()
+		payload, err := host.Encryption.Decrypt(emsg)
+		if err != nil {
+			return nil, err
+		}
+		msg := drshproto.SessionMessage{}
+		err = proto.Unmarshal(payload, &msg)
+		if err != nil {
+			return nil, err
+		}
+		return &msg, nil
+	}
+	return nil, nil
+}
 
 func (host *RedisHost) startMessageSender() {
 	for omsg := range host.outgoingMessages {
-		var payload []byte
-		var err error
 		if omsg.killFlag {
 			break
+		}
+		var wmsg drshproto.Message
+		if omsg.publicMessage != nil {
+			wmsg.Wrapper = &drshproto.Message_PublicMessage{omsg.publicMessage}
 		} else if omsg.sessionMessage != nil {
-			payload, err = proto.Marshal(omsg.sessionMessage)
+			payload, err := proto.Marshal(omsg.sessionMessage)
 			if err != nil {
-				host.Logger.Warnf("Failed to marshal message: %s", err)
+				host.Logger.Warnf("Error sending message: %s", err)
 				continue
 			}
 			// Session messages have an extra layer of encryption after marshalling
-			payload, err = host.Encryption.Encrypt(payload)
+			emsg, err := host.Encryption.Encrypt(payload)
 			if err != nil {
-				host.Logger.Warnf("Failed to marshal message: %s", err)
+				host.Logger.Warnf("Error sending message: %s", err)
 				continue
 			}
-		} else if omsg.publicMessage != nil {
-			payload, err = proto.Marshal(omsg.publicMessage)
-			if err != nil {
-				host.Logger.Warnf("Failed to marshal message: %s", err)
-				continue
-			}
+			wmsg.Wrapper = &drshproto.Message_EncryptedSessionMessage{emsg}
+		}
+		payload, err := proto.Marshal(&wmsg)
+		if err != nil {
+			host.Logger.Warnf("Error sending message: %s", err)
+			continue
 		}
 		err = host.rclient.Publish(ctx, "drsh:"+omsg.recipient, payload).Err()
 		if err != nil {
-			// If the host is closed, this is likely a normal shutdown event
 			if host.IsOpen() {
-				host.Logger.Warnf("Failed to publish message: %s", err)
+				host.Logger.Warnf("Error sending message: %s", err)
 				continue
 			} else {
+				// If the host is closed, this is likely a normal shutdown event
 				break
 			}
 		}
@@ -221,44 +223,26 @@ func (host *RedisHost) startMessageReceiver() {
 			}
 		}
 		payload := []byte(rmsg.Payload)
-		// If the host in session mode, assume all incoming messages are encrypted session messages.
-		// Otherwise, assume all incoming messages are unencrypted public messages.
-		if host.IsSession() {
-			payload, err = host.Encryption.Decrypt(payload)
-			if err != nil {
-				host.Logger.Warnf("Failed to decrypt message: %s", err)
-				continue
-			}
-			msg := drshproto.SessionMessage{}
-			err = proto.Unmarshal(payload, &msg)
-			if err != nil {
-				host.Logger.Warnf("Failed to unmarshal message: %s", err)
-				continue
-			}
-			if msg.GetType() == drshproto.SessionMessage_READY && msg.GetSender() == host.Hostname {
-				host.readyMtx.Lock()
-				host.readyFlag = true
-				host.readyCnd.Signal()
-				host.readyMtx.Unlock()
-				continue
-			}
-			host.incomingSessionMessages <- msg
-		} else {
-			msg := drshproto.PublicMessage{}
-			err = proto.Unmarshal(payload, &msg)
-			if err != nil {
-				host.Logger.Warnf("Failed to unmarshal message: %s", err)
-				continue
-			}
-			if msg.GetType() == drshproto.PublicMessage_READY && msg.GetSender() == host.Hostname {
-				host.readyMtx.Lock()
-				host.readyFlag = true
-				host.readyCnd.Signal()
-				host.readyMtx.Unlock()
-				continue
-			}
-			host.incomingPublicMessages <- msg
+		wmsg := drshproto.Message{}
+		err = proto.Unmarshal(payload, &wmsg)
+		if err != nil {
+			host.Logger.Warnf("Failed to unmarshal message: %s", err)
+			continue
 		}
+		pmsg := host.GetPublicMessage(wmsg)
+		if pmsg != nil && pmsg.GetType() == drshproto.PublicMessage_READY && pmsg.GetSender() == host.Hostname {
+			host.readyMtx.Lock()
+			host.readyFlag = true
+			host.readyCnd.Signal()
+			host.readyMtx.Unlock()
+			continue
+		}
+		// TODO: Session message extraction must currently be handled by the reader of the incoming channel.
+		// In particular, for clients, session setup may not be finished before new session messages are received.
+		// If session message extraction were performed here, it could introduce race conditions.
+		// A more permanent fix would be to split pipelines but delay messages in the session pipeline if
+		// session setup has not concluded yet.
+		host.incomingMessages <- wmsg
 	}
 }
 
@@ -274,17 +258,10 @@ func (host *RedisHost) waitUntilReady() {
 			if ready {
 				break
 			}
-			if host.IsSession() {
-				host.SendSessionMessage(host.Hostname, drshproto.SessionMessage{
-					Type:   drshproto.SessionMessage_READY,
-					Sender: host.Hostname,
-				})
-			} else {
-				host.SendPublicMessage(host.Hostname, drshproto.PublicMessage{
-					Type:   drshproto.PublicMessage_READY,
-					Sender: host.Hostname,
-				})
-			}
+			host.SendPublicMessage(host.Hostname, drshproto.PublicMessage{
+				Type:   drshproto.PublicMessage_READY,
+				Sender: host.Hostname,
+			})
 			time.Sleep(500 * time.Millisecond)
 		}
 	})()
@@ -321,8 +298,7 @@ func (host *RedisHost) Close() {
 	if !host.childFlag {
 		host.rclient.Close()
 	}
-    // Closes all channels
-    close(host.outgoingMessages)
-    close(host.incomingPublicMessages)
-    close(host.incomingSessionMessages)
+	// Closes all channels
+	close(host.outgoingMessages)
+	close(host.incomingMessages)
 }

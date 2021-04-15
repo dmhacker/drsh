@@ -142,9 +142,6 @@ func NewSession(serv *Server, clnt string, keyPart []byte, mode drshproto.Sessio
 		return nil, err
 	}
 
-	// Indicate that this session will only be using encrypted session messages
-	session.Host.SetSession(true)
-
 	return &session, nil
 }
 
@@ -226,10 +223,19 @@ func (session *Session) handleExit(err error, ack bool) {
 }
 
 func (session *Session) startMessageHandler() {
-	for msg := range session.Host.incomingSessionMessages {
+	for imsg := range session.Host.incomingMessages {
+		msg, err := session.Host.GetSessionMessage(imsg)
+		if err != nil {
+			session.Host.Logger.Warnf("Failed to get session message: %s", err)
+			continue
+		}
+		if msg == nil {
+			session.Host.Logger.Warnf("Session %s only accepts session messages.", session.Host.Hostname)
+			continue
+		}
 		if msg.GetSender() != session.clientHostname {
 			session.Host.Logger.Warnf("Invalid participant '%s' in session %s.", msg.GetSender(), session.Host.Hostname)
-			return
+			continue
 		}
 		session.refreshExpiry()
 		switch msg.GetType() {
@@ -313,9 +319,9 @@ func (session *Session) startTimeoutHandler() {
 
 // Non-blocking function that enables session packet processing.
 func (session *Session) Start() {
+	session.Host.Start()
 	go session.startMessageHandler()
 	go session.startTimeoutHandler()
-	session.Host.Start()
 	if session.mode == drshproto.SessionMode_MODE_FILE_DOWNLOAD {
 		go session.startFileDownloadHandler()
 	}

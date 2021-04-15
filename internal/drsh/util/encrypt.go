@@ -7,7 +7,6 @@ import (
 	"io"
 
 	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
-	"github.com/golang/protobuf/proto"
 	"github.com/monnand/dhkx"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
@@ -71,32 +70,22 @@ func (em *EncryptionModule) FreePrivateKeys() {
 
 // Encrypt a message with the key formed during the key exchange process.
 // If encryption is not enabled, then the data is returned without modification.
-func (em *EncryptionModule) Encrypt(data []byte) ([]byte, error) {
+func (em *EncryptionModule) Encrypt(data []byte) (*drshproto.EncryptedSessionMessage, error) {
 	nonce := make([]byte, chacha20poly1305.NonceSize)
 	_, err := rand.Read(nonce)
 	if err != nil {
 		return nil, err
 	}
 	ciphertext := em.cipher.Seal(nil, nonce, data, nil)
-	emsg := drshproto.EncryptedMessage{
+	return &drshproto.EncryptedSessionMessage{
 		Ciphertext: ciphertext,
 		Nonce:      nonce,
-	}
-	encrypted, err := proto.Marshal(&emsg)
-	if err != nil {
-		return nil, err
-	}
-	return encrypted, nil
+	}, nil
 }
 
 // Decrypts a ciphertext with the key formed during the key exchange process.
 // If encryption is not enabled, then the data is returned without modification.
-func (em *EncryptionModule) Decrypt(data []byte) ([]byte, error) {
-	emsg := drshproto.EncryptedMessage{}
-	err := proto.Unmarshal([]byte(data), &emsg)
-	if err != nil {
-		return nil, err
-	}
+func (em *EncryptionModule) Decrypt(emsg *drshproto.EncryptedSessionMessage) ([]byte, error) {
 	plaintext, err := em.cipher.Open(nil, emsg.Nonce, emsg.Ciphertext, nil)
 	if err != nil {
 		return nil, err
