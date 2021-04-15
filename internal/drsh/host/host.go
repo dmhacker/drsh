@@ -216,7 +216,7 @@ func (host *RedisHost) startMessageReceiver() {
 		if err != nil {
 			// If the host is closed, this is likely a normal shutdown event
 			if host.IsOpen() {
-				host.Logger.Warnf("Failed to receive message: %s", err)
+				host.Logger.Warnf("Error receiving message: %s", err)
 				continue
 			} else {
 				break
@@ -226,7 +226,7 @@ func (host *RedisHost) startMessageReceiver() {
 		wmsg := drshproto.Message{}
 		err = proto.Unmarshal(payload, &wmsg)
 		if err != nil {
-			host.Logger.Warnf("Failed to unmarshal message: %s", err)
+			host.Logger.Warnf("Error receiving message: %s", err)
 			continue
 		}
 		pmsg := host.GetPublicMessage(wmsg)
@@ -247,8 +247,8 @@ func (host *RedisHost) startMessageReceiver() {
 }
 
 func (host *RedisHost) waitUntilReady() {
-	// The ready check works by spawning a goroutine to send READY packets
-	// through Redis back to itself. As soon as one of these packets is
+	// The ready check works by spawning a goroutine to send READY messages
+	// through Redis back to itself. As soon as one of these messages is
 	// fully processed, this indicates that the pipeline is functional
 	go (func() {
 		for {

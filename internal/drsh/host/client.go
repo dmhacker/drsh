@@ -41,7 +41,7 @@ type Client struct {
 }
 
 // NewClient creates a new client and its underlying connection to Redis. It is not actively
-// receiving and sending packets at this point; that is only enabled upon start.
+// receiving, sending, or processing messages at this point; that is only enabled upon start.
 func NewClient(username string, hostname string, uri string, logger *zap.SugaredLogger) (*Client, error) {
 	clnt := Client{
 		rawRemoteHostname:    hostname,
@@ -143,7 +143,7 @@ func (clnt *Client) handleExit(err error, ack bool) {
 				Type:   drshproto.SessionMessage_EXIT,
 				Sender: clnt.Host.Hostname,
 			})
-			// Add a slight delay so the disconnect packet can send
+			// Add a slight delay so the exit message can send
 			time.Sleep(100 * time.Millisecond)
 		}
 		clnt.finished <- true
@@ -152,14 +152,14 @@ func (clnt *Client) handleExit(err error, ack bool) {
 	}
 }
 
-func (clnt *Client) startMessageReceiver() {
+func (clnt *Client) startMessageHandler() {
 	for imsg := range clnt.Host.incomingMessages {
-        pmsg := clnt.Host.GetPublicMessage(imsg)
-        smsg, err := clnt.Host.GetSessionMessage(imsg)
-        if err != nil {
-			clnt.Host.Logger.Warnf("Failed to get session message: %s", err)
-            continue
-        }
+		pmsg := clnt.Host.GetPublicMessage(imsg)
+		smsg, err := clnt.Host.GetSessionMessage(imsg)
+		if err != nil {
+			clnt.Host.Logger.Warnf("Error receiving message: %s", err)
+			continue
+		}
 		if pmsg != nil {
 			switch pmsg.GetType() {
 			case drshproto.PublicMessage_PING_RESPONSE:
@@ -167,7 +167,7 @@ func (clnt *Client) startMessageReceiver() {
 			case drshproto.PublicMessage_SESSION_RESPONSE:
 				clnt.handleSession(pmsg.GetSender(), pmsg.GetSessionCreated(), pmsg.GetSessionError(), pmsg.GetSessionKeyPart(), pmsg.GetSessionId(), pmsg.GetSessionMotd())
 			default:
-				clnt.Host.Logger.Warnf("Received invalid packet from '%s'.", pmsg.GetSender())
+				clnt.Host.Logger.Warnf("Received invalid message from '%s'.", pmsg.GetSender())
 			}
 		} else if smsg != nil {
 			clnt.refreshExpiry()
@@ -183,7 +183,7 @@ func (clnt *Client) startMessageReceiver() {
 			case drshproto.SessionMessage_EXIT:
 				clnt.handleExit(nil, false)
 			default:
-				clnt.Host.Logger.Warnf("Received invalid packet from '%s'.", smsg.GetSender())
+				clnt.Host.Logger.Warnf("Received invalid message from '%s'.", smsg.GetSender())
 			}
 		}
 
@@ -227,7 +227,7 @@ func (clnt *Client) UploadFile(localFilename string, remoteFilename string) {
 	clnt.displayMotd = false
 	// Establish secure connection to the server
 	clnt.connect(drshproto.SessionMode_MODE_FILE_UPLOAD, remoteFilename)
-	// Read from local file, break into packets, and send each one individually
+	// Read from local file, break into chunks, and send each one individually
 	go (func() {
 		for {
 			buf := make([]byte, 4096)
@@ -295,7 +295,7 @@ func (clnt *Client) LoginInteractively() {
 		}
 	})()
 	winchChan <- syscall.SIGWINCH
-	// Capture input in packets and send to server
+	// Capture input and send to server
 	go (func() {
 		for {
 			buf := make([]byte, 4096)
@@ -311,7 +311,7 @@ func (clnt *Client) LoginInteractively() {
 			})
 		}
 	})()
-	// Keepalive routine sends packets every so often to keep connection alive
+	// Keepalive routine sends messages every so often to keep connection alive
 	go (func() {
 		for {
 			clnt.Host.SendSessionMessage(clnt.connectedSession, drshproto.SessionMessage{
@@ -404,11 +404,11 @@ func (clnt *Client) startTimeoutHandler() {
 	}
 }
 
-// Start is a non-blocking function that enables client packet processing.
+// Start is a non-blocking function that enables client message processing.
 func (clnt *Client) Start() {
 	clnt.Host.Start()
 	go clnt.startTimeoutHandler()
-	go clnt.startMessageReceiver()
+	go clnt.startMessageHandler()
 }
 
 // Close is called to destroy the client's Redis connection and perform cleanup.

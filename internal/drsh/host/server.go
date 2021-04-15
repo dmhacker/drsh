@@ -17,7 +17,7 @@ type Server struct {
 }
 
 // NewServer creates a new server and its underlying connection to Redis. It is not actively
-// receiving and sending packets at this point; that is only enabled upon start.
+// receiving, sending, or processing messages at this point; that is only enabled upon start.
 func NewServer(hostname string, uri string, logger *zap.SugaredLogger) (*Server, error) {
 	serv := Server{}
 	hst, err := NewRedisHost("se-"+hostname, uri, logger)
@@ -71,12 +71,12 @@ func (serv *Server) startMessageHandler() {
 		case drshproto.PublicMessage_SESSION_REQUEST:
 			serv.handleSession(msg.GetSender(), msg.GetSessionKeyPart(), msg.GetSessionMode(), msg.GetSessionUser(), msg.GetSessionFilename())
 		default:
-			serv.Host.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
+			serv.Host.Logger.Warnf("Received invalid message from '%s'.", msg.GetSender())
 		}
 	}
 }
 
-// Non-blocking function that enables server packet processing.
+// Non-blocking function that enables server message processing.
 func (serv *Server) Start() {
 	serv.Host.Start()
 	go serv.startMessageHandler()

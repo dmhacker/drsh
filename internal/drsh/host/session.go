@@ -57,10 +57,10 @@ func userShell(username string) (*exec.Cmd, error) {
 	return exec.Command("sudo", "-u", username, shell, "-l"), nil
 }
 
-// Creates a session given that the server has received a handshake
-// request packet with necessary information like a client's public key and target username.
+// Creates a session given that the server has received necessary information like a
+// client's public key and target username.
 // It sets up the Redis host, subscribes to the proper channel, assigns a name to the session,
-// sets up encryption, and initializes the client's interactive pseudoterminal.
+// sets up encryption, and initializes the client's interactive pseudoterminal and/or transfer file.
 func NewSession(serv *Server, clnt string, keyPart []byte, mode drshproto.SessionMode, username string, filename string) (*Session, error) {
 	// Initialize pseudoterminal
 	cmd, err := userShell(username)
@@ -253,7 +253,7 @@ func (session *Session) startMessageHandler() {
 		case drshproto.SessionMessage_EXIT:
 			session.handleExit(nil, false)
 		default:
-			session.Host.Logger.Warnf("Received invalid packet from '%s'.", msg.GetSender())
+			session.Host.Logger.Warnf("Received invalid message from '%s'.", msg.GetSender())
 		}
 	}
 }
@@ -275,7 +275,7 @@ func (session *Session) startPtyOutputHandler() {
 			PtyPayload: buf[:cnt],
 		})
 		// This delay is chosen such that output from the pty is able to
-		// buffer, resulting larger packets, more efficient usage of the link,
+		// buffer, resulting larger messages, more efficient usage of the link,
 		// and more responsiveness for interactive applications like top.
 		// Too large of a delay would create the perception of lag.
 		time.Sleep(10 * time.Millisecond)
@@ -317,7 +317,7 @@ func (session *Session) startTimeoutHandler() {
 	}
 }
 
-// Non-blocking function that enables session packet processing.
+// Non-blocking function that enables session message processing.
 func (session *Session) Start() {
 	session.Host.Start()
 	go session.startMessageHandler()
