@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"io"
+	"sync"
 
 	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
 	"github.com/monnand/dhkx"
@@ -12,19 +13,26 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-// An EncryptionModule is attached to a host and provides the host
+// Attached to a host and provides the host
 // with key exchange & symmetric encryption capabilities
 type EncryptionModule struct {
-	group      *dhkx.DHGroup
-	PrivateKey *dhkx.DHKey
-	cipher     cipher.AEAD
+	cipher        cipher.AEAD
+	group         *dhkx.DHGroup
+	PrivateKey    *dhkx.DHKey
+	completedFlag bool
+	completedMtx  sync.Mutex
+	completedCnd  *sync.Cond
 }
 
 func NewEncryptionModule() EncryptionModule {
-	return EncryptionModule{}
+	em := EncryptionModule{
+		completedFlag: false,
+	}
+	em.completedCnd = sync.NewCond(&em.completedMtx)
+	return em
 }
 
-// PrepareKeyExchange creates the host's keypair needed for key exchange.
+// Creates the host's keypair needed for key exchange.
 func (em *EncryptionModule) PrepareKeyExchange() error {
 	grp, err := dhkx.GetGroup(0)
 	if err != nil {
@@ -39,7 +47,7 @@ func (em *EncryptionModule) PrepareKeyExchange() error {
 	return nil
 }
 
-// CompleteKeyExchange marks the completion of the key exchange protocol.
+// Marks the completion of the key exchange protocol.
 // When the key exchange handshake is performed, the other host's public
 // key is mixed with the keypair generated via PrepareKeyExchange. This
 // creates a shared secret, passed through a KDF and given to a cipher.
@@ -58,10 +66,22 @@ func (em *EncryptionModule) CompleteKeyExchange(key []byte) error {
 	if err != nil {
 		return err
 	}
+	em.completedMtx.Lock()
+	defer em.completedMtx.Unlock()
+	em.completedFlag = true
 	return nil
 }
 
-// FreePrivateKeys removes references to the keypair, allowing for it to
+// Blocks until a key exchange has been completed, resulting in a valid cipher
+func (em *EncryptionModule) WaitForKeyExchange() {
+	em.completedMtx.Lock()
+	defer em.completedMtx.Unlock()
+	for !em.completedFlag {
+		em.completedCnd.Wait()
+	}
+}
+
+// Removes references to the keypair, allowing for it to
 // be garbage collected.
 func (em *EncryptionModule) FreePrivateKeys() {
 	em.group = nil

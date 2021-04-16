@@ -64,18 +64,18 @@ func (serv *Server) handleSession(sender string, keyPart []byte) {
 
 func (serv *Server) startMessageHandler() {
 	for imsg := range serv.Host.incomingMessages {
-		msg := serv.Host.GetPublicMessage(imsg)
-		if msg == nil {
+		pmsg := imsg.publicMessage
+		if pmsg == nil {
 			serv.Host.Logger.Warnf("Server %s only accepts public messages.", serv.Host.Hostname)
 			continue
 		}
-		switch msg.GetType() {
+		switch pmsg.GetType() {
 		case drshproto.PublicMessage_PING_REQUEST:
-			serv.handlePing(msg.GetSender())
+			serv.handlePing(pmsg.GetSender())
 		case drshproto.PublicMessage_SESSION_REQUEST:
-			serv.handleSession(msg.GetSender(), msg.GetSessionKeyPart())
+			serv.handleSession(pmsg.GetSender(), pmsg.GetSessionKeyPart())
 		default:
-			serv.Host.Logger.Warnf("Received invalid message from '%s'.", msg.GetSender())
+			serv.Host.Logger.Warnf("Received invalid message from '%s'.", pmsg.GetSender())
 		}
 	}
 }

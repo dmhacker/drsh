@@ -170,12 +170,8 @@ func (clnt *Client) handleExit(err error, ack bool) {
 
 func (clnt *Client) startMessageHandler() {
 	for imsg := range clnt.Host.incomingMessages {
-		pmsg := clnt.Host.GetPublicMessage(imsg)
-		smsg, err := clnt.Host.GetSessionMessage(imsg)
-		if err != nil {
-			clnt.Host.Logger.Warnf("Error handling message: %s", err)
-			continue
-		}
+		pmsg := imsg.publicMessage
+		smsg := imsg.sessionMessage
 		if pmsg != nil {
 			switch pmsg.GetType() {
 			case drshproto.PublicMessage_PING_RESPONSE:

@@ -13,6 +13,11 @@ import (
 	"go.uber.org/zap"
 )
 
+type incomingMessage struct {
+	sessionMessage *drshproto.SessionMessage
+	publicMessage  *drshproto.PublicMessage
+}
+
 type outgoingMessage struct {
 	recipient      string
 	sessionMessage *drshproto.SessionMessage
@@ -27,7 +32,7 @@ type RedisHost struct {
 	Hostname         string                    // The name of this host (e.g. what channel this host is listening on)
 	Logger           *zap.SugaredLogger        // The logger attached to this host
 	Encryption       drshutil.EncryptionModule // Responsible for performing key exchange, symmetric encryption, etc.
-	incomingMessages chan drshproto.Message    // Any incoming messages can be read through this channel
+	incomingMessages chan incomingMessage      // Any incoming messages can be read through this channel
 	outgoingMessages chan outgoingMessage      // Any messages sent through this channel are sent to other Redis hosts
 	rclient          *redis.Client             // The Redis client attached to this host
 	rpubsub          *redis.PubSub             // The Redis channel the client is listening on
@@ -56,7 +61,7 @@ func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger) (*Redi
 		Hostname:         hostname,
 		Logger:           logger,
 		Encryption:       drshutil.NewEncryptionModule(),
-		incomingMessages: make(chan drshproto.Message, 10),
+		incomingMessages: make(chan incomingMessage, 10),
 		outgoingMessages: make(chan outgoingMessage, 10),
 		rclient:          redis.NewClient(opt),
 		readyFlag:        false,
@@ -87,7 +92,7 @@ func NewChildRedisHost(hostname string, parent *RedisHost) (*RedisHost, error) {
 		Hostname:         hostname,
 		Logger:           parent.Logger,
 		Encryption:       drshutil.NewEncryptionModule(),
-		incomingMessages: make(chan drshproto.Message, 10),
+		incomingMessages: make(chan incomingMessage, 10),
 		outgoingMessages: make(chan outgoingMessage, 10),
 		rclient:          parent.rclient,
 		readyFlag:        false,
@@ -142,34 +147,6 @@ func (host *RedisHost) SendSessionMessage(recipient string, msg drshproto.Sessio
 	}
 }
 
-// Attempts to extract the public component of the message if it exists.
-func (host *RedisHost) GetPublicMessage(mmsg drshproto.Message) *drshproto.PublicMessage {
-	switch mmsg.Wrapper.(type) {
-	case *drshproto.Message_PublicMessage:
-		return mmsg.GetPublicMessage()
-	}
-	return nil
-}
-
-// Attempts to extract the session component of the message if it exists.
-func (host *RedisHost) GetSessionMessage(mmsg drshproto.Message) (*drshproto.SessionMessage, error) {
-	switch mmsg.Wrapper.(type) {
-	case *drshproto.Message_EncryptedSessionMessage:
-		emsg := mmsg.GetEncryptedSessionMessage()
-		payload, err := host.Encryption.Decrypt(emsg)
-		if err != nil {
-			return nil, err
-		}
-		msg := drshproto.SessionMessage{}
-		err = proto.Unmarshal(payload, &msg)
-		if err != nil {
-			return nil, err
-		}
-		return &msg, nil
-	}
-	return nil, nil
-}
-
 func (host *RedisHost) startMessageSender() {
 	for omsg := range host.outgoingMessages {
 		if omsg.killFlag {
@@ -184,7 +161,7 @@ func (host *RedisHost) startMessageSender() {
 				host.Logger.Warnf("Error sending message: %s", err)
 				continue
 			}
-			// Session messages have an extra layer of encryption after marshalling
+			host.Encryption.WaitForKeyExchange()
 			emsg, err := host.Encryption.Encrypt(payload)
 			if err != nil {
 				host.Logger.Warnf("Error sending message: %s", err)
@@ -229,20 +206,37 @@ func (host *RedisHost) startMessageReceiver() {
 			host.Logger.Warnf("Error receiving message: %s", err)
 			continue
 		}
-		pmsg := host.GetPublicMessage(wmsg)
-		if pmsg != nil && pmsg.GetType() == drshproto.PublicMessage_READY && pmsg.GetSender() == host.Hostname {
-			host.readyMtx.Lock()
-			host.readyFlag = true
-			host.readyCnd.Signal()
-			host.readyMtx.Unlock()
+		imsg := incomingMessage{}
+		switch wmsg.Wrapper.(type) {
+		case *drshproto.Message_PublicMessage:
+			pmsg := wmsg.GetPublicMessage()
+			if pmsg != nil && pmsg.GetType() == drshproto.PublicMessage_READY && pmsg.GetSender() == host.Hostname {
+				host.readyMtx.Lock()
+				host.readyFlag = true
+				host.readyCnd.Signal()
+				host.readyMtx.Unlock()
+				continue
+			}
+			imsg.publicMessage = pmsg
+		case *drshproto.Message_EncryptedSessionMessage:
+			emsg := wmsg.GetEncryptedSessionMessage()
+			host.Encryption.WaitForKeyExchange()
+			payload, err := host.Encryption.Decrypt(emsg)
+			if err != nil {
+				host.Logger.Warnf("Error receiving message: %s", err)
+				continue
+			}
+			smsg := drshproto.SessionMessage{}
+			err = proto.Unmarshal(payload, &smsg)
+			if err != nil {
+				host.Logger.Warnf("Error receiving message: %s", err)
+				continue
+			}
+			imsg.sessionMessage = &smsg
+		default:
 			continue
 		}
-		// TODO: Session message extraction must currently be handled by the reader of the incoming channel.
-		// In particular, for clients, session setup may not be finished before new session messages are received.
-		// If session message extraction were performed here, it could introduce race conditions.
-		// A more permanent fix would be to split pipelines but delay messages in the session pipeline if
-		// session setup has not concluded yet.
-		host.incomingMessages <- wmsg
+		host.incomingMessages <- imsg
 	}
 }
 

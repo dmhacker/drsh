@@ -253,42 +253,38 @@ func (session *Session) handleBootstrap(mode drshproto.SessionMode, username str
 
 func (session *Session) startMessageHandler() {
 	for imsg := range session.Host.incomingMessages {
-		msg, err := session.Host.GetSessionMessage(imsg)
-		if err != nil {
-			session.Host.Logger.Warnf("Error handling message: %s", err)
-			continue
-		}
-		if msg == nil {
+		smsg := imsg.sessionMessage
+		if smsg == nil {
 			session.Host.Logger.Warnf("Session %s only accepts session messages.", session.Host.Hostname)
 			continue
 		}
-		if msg.GetSender() != session.clientHostname {
-			session.Host.Logger.Warnf("Invalid participant '%s' in session %s.", msg.GetSender(), session.Host.Hostname)
+		if smsg.GetSender() != session.clientHostname {
+			session.Host.Logger.Warnf("Invalid participant '%s' in session %s.", smsg.GetSender(), session.Host.Hostname)
 			continue
 		}
 		session.refreshExpiry()
-		switch msg.GetType() {
+		switch smsg.GetType() {
 		case drshproto.SessionMessage_HEARTBEAT_REQUEST:
 			session.handleHeartbeat()
 		case drshproto.SessionMessage_PTY_INPUT:
-			session.handlePtyInput(msg.GetPtyPayload())
+			session.handlePtyInput(smsg.GetPtyPayload())
 		case drshproto.SessionMessage_PTY_WINCH:
-			dims := drshutil.Unpack64(msg.GetPtyDimensions())
+			dims := drshutil.Unpack64(smsg.GetPtyDimensions())
 			session.handlePtyWinch(dims[0], dims[1], dims[2], dims[3])
 		case drshproto.SessionMessage_FILE_CHUNK:
-			session.handleFileChunk(msg.GetFilePayload())
+			session.handleFileChunk(smsg.GetFilePayload())
 		case drshproto.SessionMessage_FILE_CLOSE:
 			session.handleFileClose()
 		case drshproto.SessionMessage_EXIT:
-			if msg.ExitNormal {
+			if smsg.ExitNormal {
 				session.handleExit(nil, false)
 			} else {
-				session.handleExit(fmt.Errorf("client refused connection: %s", msg.ExitError), false)
+				session.handleExit(fmt.Errorf("client refused connection: %s", smsg.ExitError), false)
 			}
 		case drshproto.SessionMessage_BOOTSTRAP_REQUEST:
-			session.handleBootstrap(msg.GetBootstrapMode(), msg.GetBootstrapUsername(), msg.GetBootstrapFilename())
+			session.handleBootstrap(smsg.GetBootstrapMode(), smsg.GetBootstrapUsername(), smsg.GetBootstrapFilename())
 		default:
-			session.Host.Logger.Warnf("Received invalid message from '%s'.", msg.GetSender())
+			session.Host.Logger.Warnf("Received invalid message from '%s'.", smsg.GetSender())
 		}
 	}
 }
