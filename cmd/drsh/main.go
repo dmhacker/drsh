@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	version     = "v1.5.2"
+	version     = "v1.5.3"
 	cfgFilename = ""
 	rootCmd     = &cobra.Command{
 		Use:   "drsh",
