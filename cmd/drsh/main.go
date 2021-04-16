@@ -187,7 +187,6 @@ func runDownload(cmd *cobra.Command, args []string) {
 }
 
 func runPing(cmd *cobra.Command, args []string) {
-	fmt.Println(args)
 	clnt := newClient(cmd, args)
 	defer clnt.Close()
 	clnt.Start()

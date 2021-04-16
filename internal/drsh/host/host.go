@@ -188,20 +188,10 @@ func (host *RedisHost) startMessageSender() {
 }
 
 func (host *RedisHost) startMessageReceiver() {
-	for {
-		rmsg, err := host.rpubsub.ReceiveMessage(ctx)
-		if err != nil {
-			// If the host is closed, this is likely a normal shutdown event
-			if host.IsOpen() {
-				host.Logger.Warnf("Error receiving message: %s", err)
-				continue
-			} else {
-				break
-			}
-		}
+	for rmsg := range host.rpubsub.Channel() {
 		payload := []byte(rmsg.Payload)
 		wmsg := drshproto.Message{}
-		err = proto.Unmarshal(payload, &wmsg)
+		err := proto.Unmarshal(payload, &wmsg)
 		if err != nil {
 			host.Logger.Warnf("Error receiving message: %s", err)
 			continue
@@ -210,7 +200,7 @@ func (host *RedisHost) startMessageReceiver() {
 		switch wmsg.Wrapper.(type) {
 		case *drshproto.Message_PublicMessage:
 			pmsg := wmsg.GetPublicMessage()
-			if pmsg != nil && pmsg.GetType() == drshproto.PublicMessage_READY && pmsg.GetSender() == host.Hostname {
+			if pmsg.GetType() == drshproto.PublicMessage_READY && pmsg.GetSender() == host.Hostname {
 				host.readyMtx.Lock()
 				host.readyFlag = true
 				host.readyCnd.Signal()
