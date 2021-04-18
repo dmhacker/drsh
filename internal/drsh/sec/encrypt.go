@@ -1,4 +1,4 @@
-package util
+package sec
 
 import (
 	"crypto/cipher"
@@ -24,12 +24,12 @@ type EncryptionModule struct {
 	completedCnd  *sync.Cond
 }
 
-func NewEncryptionModule() EncryptionModule {
+func NewEncryptionModule() *EncryptionModule {
 	em := EncryptionModule{
 		completedFlag: false,
 	}
 	em.completedCnd = sync.NewCond(&em.completedMtx)
-	return em
+	return &em
 }
 
 // Creates the host's keypair needed for key exchange.

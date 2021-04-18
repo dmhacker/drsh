@@ -7,6 +7,7 @@ import (
 	"time"
 
 	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
+	drshsec "github.com/dmhacker/drsh/internal/drsh/sec"
 	drshutil "github.com/dmhacker/drsh/internal/drsh/util"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang/protobuf/proto"
@@ -31,7 +32,7 @@ type outgoingMessage struct {
 type RedisHost struct {
 	Hostname         string                    // The name of this host (e.g. what channel this host is listening on)
 	Logger           *zap.SugaredLogger        // The logger attached to this host
-	Encryption       drshutil.EncryptionModule // Responsible for performing key exchange, symmetric encryption, etc.
+	Encryption       *drshsec.EncryptionModule // Responsible for performing key exchange, symmetric encryption, etc.
 	incomingMessages chan incomingMessage      // Any incoming messages can be read through this channel
 	outgoingMessages chan outgoingMessage      // Any messages sent through this channel are sent to other Redis hosts
 	rclient          *redis.Client             // The Redis client attached to this host
@@ -60,7 +61,7 @@ func NewRedisHost(hostname string, uri string, logger *zap.SugaredLogger) (*Redi
 	host := RedisHost{
 		Hostname:         hostname,
 		Logger:           logger,
-		Encryption:       drshutil.NewEncryptionModule(),
+		Encryption:       drshsec.NewEncryptionModule(),
 		incomingMessages: make(chan incomingMessage, 10),
 		outgoingMessages: make(chan outgoingMessage, 10),
 		rclient:          redis.NewClient(opt),
@@ -91,7 +92,7 @@ func NewChildRedisHost(hostname string, parent *RedisHost) (*RedisHost, error) {
 	child := RedisHost{
 		Hostname:         hostname,
 		Logger:           parent.Logger,
-		Encryption:       drshutil.NewEncryptionModule(),
+		Encryption:       drshsec.NewEncryptionModule(),
 		incomingMessages: make(chan incomingMessage, 10),
 		outgoingMessages: make(chan outgoingMessage, 10),
 		rclient:          parent.rclient,
