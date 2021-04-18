@@ -46,11 +46,10 @@ The config is structured in two parts, a server section and a client section.
 * The server section has a `hostname` and `redisuri` field. The URI specifies
 the Redis node that the server should connect to. The hostname specifies what
 the machine's unique name in the network is.
-* The client section has an `aliases` section, which can optionally consists of
-zero or more aliases. An alias represents a username/hostname/uri combination
-in shorthand. Rather than entering the full combination every time a client
-wants to log into a specific server, they can instead just type in the alias.
-This is similar to how aliases work in SSH.
+* The client section has an `aliases` section. An alias represents a saved combination
+for connecting as a specific user on a reachable host through some Redis instance. 
+Aliases are required for all client commands to minimize leakage of sensitive
+connection details on the command line.
 
 Please also note that while servers can be run as root and have access to
 logins as root, the practice of logging in as a root as a client is **explicitly
@@ -71,28 +70,21 @@ Use the `-h` flag for help.
 Connecting to a server is also simple.
 
 ```
-drsh login {ALIAS|USER@HOST@URI}
-```
-
-For example, with the default config, the following commands are equivalent.
-
-```
-drsh login $USER-$HOST
-drsh login $USER@$HOST@redis://localhost:6379
+drsh login [alias]
 ```
 
 Additionally, files can be uploaded to and downloaded from the server.
 
 ```
-drsh upload {ALIAS|USER@HOST@URI} {LOCAL_FILE} {REMOTE_FILE}
-drsh download {ALIAS|USER@HOST@URI} {REMOTE_FILE} {LOCAL_FILE}
+drsh upload [alias] [local_file] [remote_file]
+drsh download [alias] [remote_file] [local_file]
 ```
 
 There is also a ping command that measures the latency between a client and
 server, with the packets passing through Redis.
 
 ```
-drsh ping {ALIAS|USER@HOST@URI}
+drsh ping [alias]
 ```
 
 Again, use the `-h` flag for help.

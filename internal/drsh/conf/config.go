@@ -8,28 +8,27 @@ import (
 	"github.com/spf13/viper"
 )
 
-// AliasEntry consists of a unique name (alias), a username, a hostname, and Redis URI to connect to.
+// Represents a unique alias identifying a user remotely accessible through drsh.
 type AliasEntry struct {
-	Alias    string `mapstructure:"alias"`
 	Username string `mapstructure:"username"`
 	Hostname string `mapstructure:"hostname"`
 	RedisURI string `mapstructure:"redisuri"`
 }
 
-// Config consists of sections for the server and client. It will be used by all invocations of `drsh`.
+// Mapped directly by viper on to a config file.
 type Config struct {
 	Server struct {
+		LogFile  string `mapstructure:"logfile"`
 		Hostname string `mapstructure:"hostname"`
 		RedisURI string `mapstructure:"redisuri"`
-		LogFile  string `mapstructure:"logfile"`
 	} `mapstructure:"server"`
 	Client struct {
-		Aliases []AliasEntry `mapstructure:"aliases"`
-		LogFile string       `mapstructure:"logfile"`
+		LogFile string                `mapstructure:"logfile"`
+		Aliases map[string]AliasEntry `mapstructure:"aliases"`
 	} `mapstructure:"client"`
 }
 
-// DefaultConfigFilename returns the default location of the config file on the user's system.
+// Default location of the config file on the user's system.
 func DefaultConfigFilename() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -38,7 +37,7 @@ func DefaultConfigFilename() (string, error) {
 	return filepath.Join(home, ".drsh", "config.yml"), nil
 }
 
-// DefaultLogFilename returns the default location of a log file on the user's system.
+// Default location of a log file on the user's system.
 func DefaultLogFilename(logName string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -47,7 +46,7 @@ func DefaultLogFilename(logName string) (string, error) {
 	return filepath.Join(home, ".drsh", "logs", logName+".log"), nil
 }
 
-// WriteDefaultConfig will write a default config if one does not exist already.
+// Writes a default config if one does not exist already.
 // It will also create any necessary nested parent directories.
 func WriteDefaultConfig(filename string) error {
 	currHostname, err := os.Hostname()
@@ -66,18 +65,17 @@ func WriteDefaultConfig(filename string) error {
 	if err != nil {
 		return err
 	}
+	viper.SetDefault("Server.LogFile", servLogFile)
 	viper.SetDefault("Server.Hostname", currHostname)
 	viper.SetDefault("Server.RedisUri", "redis://localhost:6379")
-	viper.SetDefault("Server.LogFile", servLogFile)
-	viper.SetDefault("Client.Aliases", [1]AliasEntry{
-		{
-			Alias:    currHostname,
+	viper.SetDefault("Client.LogFile", clntLogFile)
+	viper.SetDefault("Client.Aliases", map[string]AliasEntry{
+		currHostname: {
 			Username: currUser.Username,
 			Hostname: currHostname,
 			RedisURI: "redis://localhost:6379",
 		},
 	})
-	viper.SetDefault("Client.LogFile", clntLogFile)
 	if err := os.MkdirAll(filepath.Dir(filename), 0777); err != nil {
 		return err
 	}

@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
+	"reflect"
 	"syscall"
 
 	drshconf "github.com/dmhacker/drsh/internal/drsh/conf"
@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	version     = "v1.5.3"
+	version     = "v1.5.4"
 	cfgFilename = ""
 	rootCmd     = &cobra.Command{
 		Use:   "drsh",
@@ -25,7 +25,7 @@ instead routed through Redis.`,
 		Use:   "config",
 		Short: "Create a default config if one does not exist",
 		Long: `If a config file does not exist at the given path,
-it will create a default file. drsh should not be run with the default settings
+create a default config. drsh should not be run with the default settings
 but the default config provides a useful starting point.`,
 		Run: runConfig,
 	}
@@ -33,22 +33,18 @@ but the default config provides a useful starting point.`,
 		Use:   "serve",
 		Short: "Start the drsh daemon for this machine",
 		Long: `Actively listen for connection requests from other clients on the
-Redis network. Functions similarily to sshd, only all packets are routed
-through Redis.`,
+Redis instance.`,
 		Run: runServe,
 	}
 	loginCmd = &cobra.Command{
-		Use:   "login [alias|user@host@redis]",
+		Use:   "login [alias]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Log in to a remote server",
-		Long: `Open a secure, interactive shell to a host on the Redis network using the given 
-hostname and username. Connection strings are either provided as a 
-config-defined alias  or in raw format. The session is assumed to be interactive;
-there is no option to disable the pty at the moment.`,
-		Run: runLogin,
+		Long:  `Open a secure, interactive shell to a host on the Redis instance.`,
+		Run:   runLogin,
 	}
 	uploadCmd = &cobra.Command{
-		Use:   "upload [alias|user@host@redis] [local_file] [remote_file]",
+		Use:   "upload [alias] [local_file] [remote_file]",
 		Args:  cobra.ExactArgs(3),
 		Short: "Upload a file to a remote server",
 		Long: `Upload a locally hosted file to a remote server.
@@ -56,7 +52,7 @@ The remote filename should be specified from the perspective of the remote user'
 		Run: runUpload,
 	}
 	downloadCmd = &cobra.Command{
-		Use:   "download [alias|user@host@redis] [remote_file] [local_file]",
+		Use:   "download [alias] [remote_file] [local_file]",
 		Args:  cobra.ExactArgs(3),
 		Short: "Download a file from a remote server",
 		Long: `Download a file hosted on a remote server and saves the content to a local file.
@@ -64,12 +60,11 @@ The remote filename should be specified from the perspective of the remote user'
 		Run: runDownload,
 	}
 	pingCmd = &cobra.Command{
-		Use:   "ping [alias|user@host@redis]",
+		Use:   "ping [alias]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Ping a remote server",
-		Long: `Calculate the round-trip time from the current machine to the specified server.
-Connection strings are either provided as an alias in the config or in raw format.`,
-		Run: runPing,
+		Long:  `Calculate the round trip time from the current machine to the specified server.`,
+		Run:   runPing,
 	}
 	versionCmd = &cobra.Command{
 		Use:   "version",
@@ -116,27 +111,9 @@ func newClient(cmd *cobra.Command, args []string) *drshhost.Client {
 	logger := drshconf.NewLogger("client", &cfg)
 	defer logger.Sync()
 	// Attempt to resolve alias using config
-	rawSelection := args[0]
-	var selection drshconf.AliasEntry
-	var selected bool = false
-	for _, entry := range cfg.Client.Aliases {
-		if rawSelection == entry.Alias {
-			selection = entry
-			selected = true
-			break
-		}
-	}
-	// If no alias matches, then interpret it directly
+	selection, selected := cfg.Client.Aliases[args[0]]
 	if !selected {
-		components := strings.Split(rawSelection, "@")
-		if len(components) < 3 {
-			terminate(fmt.Errorf("command should either be an alias or in the format USER@HOST@URI"))
-		}
-		selection = drshconf.AliasEntry{
-			Username: components[0],
-			Hostname: components[1],
-			RedisURI: strings.Join(components[2:], "@"),
-		}
+		terminate(fmt.Errorf("%s is not a valid alias; available aliases are %v", args[0], reflect.ValueOf(cfg.Client.Aliases).MapKeys()))
 	}
 	// Initialize and start client
 	clnt, err := drshhost.NewClient(selection.Username, selection.Hostname, selection.RedisURI, logger.Sugar())
