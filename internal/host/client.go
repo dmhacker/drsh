@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
-	drshutil "github.com/dmhacker/drsh/internal/drsh/util"
+	drshproto "github.com/dmhacker/drsh/internal/proto"
+	drshutil "github.com/dmhacker/drsh/internal/util"
 	"github.com/golang/protobuf/proto"
 	"go.uber.org/zap"
 	"golang.org/x/term"

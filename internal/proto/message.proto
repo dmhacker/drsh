@@ -1,7 +1,7 @@
 syntax = "proto3";
 package drsh.proto;
 
-option go_package = "./internal/drsh/proto";
+option go_package = "./internal/proto";
 
 enum SessionMode {
   MODE_WAITING = 0;

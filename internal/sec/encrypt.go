@@ -7,7 +7,7 @@ import (
 	"io"
 	"sync"
 
-	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
+	drshproto "github.com/dmhacker/drsh/internal/proto"
 	"github.com/monnand/dhkx"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"

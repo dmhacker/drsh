@@ -14,8 +14,8 @@ import (
 
 	"github.com/astromechza/etcpwdparse"
 	"github.com/creack/pty"
-	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
-	drshutil "github.com/dmhacker/drsh/internal/drsh/util"
+	drshproto "github.com/dmhacker/drsh/internal/proto"
+	drshutil "github.com/dmhacker/drsh/internal/util"
 )
 
 // Represents the server's view of the connection between it and the client.

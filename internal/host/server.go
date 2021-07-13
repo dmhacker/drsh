@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
+	drshproto "github.com/dmhacker/drsh/internal/proto"
 )
 
 // Represents a host on the network that accepts connections & pings from any clients

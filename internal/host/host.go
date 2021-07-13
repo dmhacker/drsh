@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	drshproto "github.com/dmhacker/drsh/internal/drsh/proto"
-	drshsec "github.com/dmhacker/drsh/internal/drsh/sec"
-	drshutil "github.com/dmhacker/drsh/internal/drsh/util"
+	drshproto "github.com/dmhacker/drsh/internal/proto"
+	drshsec "github.com/dmhacker/drsh/internal/sec"
+	drshutil "github.com/dmhacker/drsh/internal/util"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang/protobuf/proto"
 	"go.uber.org/zap"

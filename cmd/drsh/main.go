@@ -6,13 +6,13 @@ import (
 	"reflect"
 	"syscall"
 
-	drshconf "github.com/dmhacker/drsh/internal/drsh/conf"
-	drshhost "github.com/dmhacker/drsh/internal/drsh/host"
+	drshconf "github.com/dmhacker/drsh/internal/conf"
+	drshhost "github.com/dmhacker/drsh/internal/host"
 	"github.com/spf13/cobra"
 )
 
 var (
-	version     = "v1.5.4"
+	version     = "v1.5.5"
 	cfgFilename = ""
 	rootCmd     = &cobra.Command{
 		Use:   "drsh",
